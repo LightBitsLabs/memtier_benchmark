@@ -535,6 +535,7 @@ void client::create_request(struct timeval timestamp)
         cmd_size = m_protocol->write_command_set(key, key_len, value, value_len,
             obj->get_expiry(), m_config->data_offset);
 
+        printf("----- cmd_size = %d, key_len = %u, value_len = %u\n", cmd_size, key_len, value_len); //TODO: remove
         m_pipeline.push(new client::request(rt_set, cmd_size, &timestamp, 1));
     } else if (m_get_ratio_count < m_config->ratio.b) {
         // get command
@@ -640,6 +641,7 @@ void client::handle_response(struct timeval timestamp, request *request, protoco
 {
     switch (request->m_type) {
         case rt_get:
+            //printf("request->m_size = %u, response->get_total_len() = %u\n", request->m_size, response->get_total_len()); //TODO: remove
             m_stats.update_get_op(&timestamp,
                 request->m_size + response->get_total_len(),
                 ts_diff(request->m_sent_time, timestamp),
@@ -647,6 +649,7 @@ void client::handle_response(struct timeval timestamp, request *request, protoco
                 request->m_keys - response->get_hits());
             break;
         case rt_set:
+            printf("request->m_size = %u, response->get_total_len() = %u\n", request->m_size, response->get_total_len()); //TODO: remove
             m_stats.update_set_op(&timestamp,
                 request->m_size + response->get_total_len(),
                 ts_diff(request->m_sent_time, timestamp));
@@ -1031,6 +1034,9 @@ void run_stats::one_second_stats::merge(const one_second_stats& other)
     m_total_get_latency += other.m_total_get_latency;
     m_total_set_latency += other.m_total_set_latency;
     m_total_wait_latency += other.m_total_wait_latency;
+    printf("^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n");
+    printf("m_ops_get = %lu, m_ops_set = %lu, m_ops_wait = %lu", other.m_ops_get, other.m_ops_set, other.m_ops_wait);
+    printf(" m_bytes_get = %lu, m_bytes_set = %lu\n", other.m_bytes_get, other.m_bytes_set);
 }
 
 run_stats::totals::totals() :
@@ -1117,6 +1123,8 @@ void run_stats::roll_cur_stats(struct timeval* ts)
 
 void run_stats::update_get_op(struct timeval* ts, unsigned int bytes, unsigned int latency, unsigned int hits, unsigned int misses)
 {
+    //printf("\n*******************************************\n"); //TODO: remove
+    //printf("bytes = %u\n", bytes); //TODO: remove
     roll_cur_stats(ts);
     m_cur_stats.m_bytes_get += bytes;
     m_cur_stats.m_ops_get++;
@@ -1134,6 +1142,7 @@ void run_stats::update_get_op(struct timeval* ts, unsigned int bytes, unsigned i
 
 void run_stats::update_set_op(struct timeval* ts, unsigned int bytes, unsigned int latency)
 {
+    //printf("**** bytes = %u\n", bytes); //TODO: remove
     roll_cur_stats(ts);
     m_cur_stats.m_bytes_set += bytes;
     m_cur_stats.m_ops_set++;
@@ -1395,6 +1404,8 @@ void run_stats::merge(const run_stats& other, int iteration)
 void run_stats::summarize(totals& result) const
 {
     // aggregate all one_second_stats
+    printf("summarize\n"); //TODO: remove
+    printf("m_stats size = %lu\n", m_stats.size()); //TODO: remove
     one_second_stats totals(0);
     for (std::vector<one_second_stats>::const_iterator i = m_stats.begin();
             i != m_stats.end(); i++) {
@@ -1442,6 +1453,9 @@ void run_stats::summarize(totals& result) const
         result.m_latency = 0;
     }
     result.m_bytes_sec = (result.m_bytes / 1024.0) / test_duration_usec * 1000000;
+    printf("\nm_ops = %lu\n", result.m_ops);
+    printf("m_bytes = %lu\n", result.m_bytes);
+    printf("test_duration_usec = %lu\n", test_duration_usec);
 }
 
 void result_print_to_json(json_handler * jsonhandler, const char * type, unsigned long int total_ops, float ops, float hits, float miss, float latency, float kbs)
