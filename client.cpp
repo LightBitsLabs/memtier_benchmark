@@ -878,6 +878,129 @@ bool verify_client::finished(void)
 
 ///////////////////////////////////////////////////////////////////////////
 
+crc_verify_client::verify_request::verify_request(request_type type,
+                                              unsigned int size,
+                                              struct timeval* sent_time,
+                                              unsigned int keys,
+                                              const char *key,
+                                              unsigned int key_len) :
+        client::request(type, size, sent_time, keys),
+        m_key(NULL), m_key_len(0)
+{
+    m_key_len = key_len;
+    m_key = new char[key_len];
+    memcpy(m_key, key, m_key_len);
+}
+
+crc_verify_client::verify_request::~verify_request(void)
+{
+    delete[] m_key;
+    m_key = NULL;
+}
+
+crc_verify_client::crc_verify_client(struct event_base *event_base,
+                             benchmark_config *config,
+                             abstract_protocol *protocol,
+                             object_generator *obj_gen) :
+        client(event_base, config, protocol, obj_gen),
+        m_finished(false), m_verified_keys(0), m_errors(0)
+{
+    m_protocol->set_keep_value(true);
+    m_obj_gen->set_key_range(config->key_minimum, config->key_maximum);
+}
+
+unsigned long long int crc_verify_client::get_verified_keys(void)
+{
+    return m_verified_keys;
+}
+
+unsigned long long int crc_verify_client::get_errors(void)
+{
+    return m_errors;
+}
+
+void crc_verify_client::create_request(struct timeval timestamp)
+{
+    // Prepare a GET request that will be compared against a previous
+    // SET request.
+    unsigned int cmd_size;
+    int iter = obj_iter_type(m_config, 2);
+    unsigned int keylen;
+    const char *key = m_obj_gen->get_key(iter, &keylen);
+    assert(key != NULL);
+    assert(keylen > 0);
+
+    benchmark_debug_log("CRC verify: GET key=[%.*s]\n", keylen, key);
+    cmd_size = m_protocol->write_command_get(key, keylen, m_config->data_offset);
+    m_pipeline.push(new crc_verify_client::verify_request(rt_get, cmd_size, &timestamp, 1, key, keylen));
+}
+
+void crc_verify_client::handle_response(struct timeval timestamp, request *request, protocol_response *response)
+{
+    unsigned int rvalue_len;
+    const char *rvalue = response->get_value(&rvalue_len);
+    verify_request *vr = static_cast<verify_request *>(request);
+
+    assert(vr->m_type == rt_get);
+    if (response->is_error()) {
+        benchmark_error_log("error: request for key [%.*s] failed: %s\n",
+                            vr->m_key_len, vr->m_key, response->get_status());
+        m_errors++;
+    } else {
+        if (rvalue) {
+            uint32_t crc = crc32::calc_crc32(rvalue, rvalue_len - crc32::size);
+            const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator*>(m_obj_gen)->get_actual_value_size();
+            if (memcmp(crc_buffer, &crc, crc32::size) == 0) {
+                benchmark_debug_log("key: [%.*s] verified successfuly.\n",
+                                    vr->m_key_len, vr->m_key);
+                m_verified_keys++;
+                return;
+            }
+        }
+
+        benchmark_error_log("error: key [%.*s]: verification failed\n",
+                            vr->m_key_len, vr->m_key);
+        m_errors++;
+    }
+}
+
+bool crc_verify_client::finished(void)
+{
+    if (m_finished)
+        return true;
+    if (m_config->requests > 0 && m_reqs_processed >= m_config->requests * m_config->clients * m_config->threads)
+        return true;
+    return false;
+}
+
+void crc_verify_client::fill_pipeline(void)
+{
+    struct timeval now;
+    gettimeofday(&now, NULL);
+
+    while (!finished() && m_pipeline.size() < m_config->pipeline) {
+        if (!is_conn_setup_done()) {
+            send_conn_setup_commands(now);
+            return;
+        }
+
+        // don't exceed requests
+        if (m_config->requests > 0 && m_reqs_processed + m_pipeline.size() >= m_config->requests * m_config->threads * m_config->clients)
+            break;
+
+        // if we have reconnect_interval stop enlarging the pipeline
+        // on time
+        if (m_config->reconnect_interval) {
+            if ((m_reqs_processed % m_config->reconnect_interval) + m_pipeline.size() >= m_config->reconnect_interval)
+                return;
+        }
+
+        create_request(now);
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////
+
 client_group::client_group(benchmark_config* config, abstract_protocol *protocol, object_generator* obj_gen) : 
     m_base(NULL), m_config(config), m_protocol(protocol), m_obj_gen(obj_gen)
 {
