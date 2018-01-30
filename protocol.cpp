@@ -31,6 +31,8 @@
 #include "memtier_benchmark.h"
 #include "libmemcached_protocol/binary.h"
 
+typedef std::list<std::pair<const char*,unsigned int>>::const_iterator val_list_it;
+
 /////////////////////////////////////////////////////////////////////////
 
 abstract_protocol::abstract_protocol() :
@@ -242,9 +244,9 @@ int redis_protocol::write_command_set(const char *key, int key_len, const val_li
             "$%u\r\n", (unsigned int) strlen(expiry_str), expiry_str, total_buffers_len);
     }
 
-    for (auto value_info_pair : *values_list)
+    for (val_list_it it = values_list->begin(); it != values_list->end(); ++it)
     {
-        evbuffer_add(m_write_buf, value_info_pair.first,value_info_pair.second);
+        evbuffer_add(m_write_buf, (*it).first, (*it).second);
     }
 
     evbuffer_add(m_write_buf, "\r\n", 2);
@@ -451,9 +453,9 @@ int memcache_text_protocol::write_command_set(const char *key, int key_len, cons
     
     size = evbuffer_add_printf(m_write_buf,
         "set %.*s 0 %u %u\r\n", key_len, key, expiry, total_buffers_len);
-    for (auto value_info_pair : *values_list)
+    for (val_list_it it = values_list->begin(); it != values_list->end(); ++it)
     {
-        evbuffer_add(m_write_buf, value_info_pair.first, value_info_pair.second);
+        evbuffer_add(m_write_buf, (*it).first, (*it).second);
     }
     evbuffer_add(m_write_buf, "\r\n", 2);
     size += total_buffers_len + 2;
@@ -687,9 +689,9 @@ int memcache_binary_protocol::write_command_set(const char *key, int key_len, co
 
     evbuffer_add(m_write_buf, &req, sizeof(req));
     evbuffer_add(m_write_buf, key, key_len);
-    for (auto value_info : *values_list)
+    for (val_list_it it = values_list->begin(); it != values_list->end(); ++it)
     {
-        evbuffer_add(m_write_buf, value_info.first, value_info.second);
+        evbuffer_add(m_write_buf, (*it).first, (*it).second);
     }
 
     return sizeof(req) + key_len + total_buffers_len;
