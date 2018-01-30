@@ -20,6 +20,7 @@
 #define _OBJ_GEN_H
 
 #include <vector>
+#include <stdint.h>
 #include "file_io.h"
 
 struct random_data;
@@ -70,6 +71,14 @@ public:
     unsigned int get_expiry(void);    
 };
 
+class crc32 {
+public:
+    static const unsigned int size = 4;
+    static uint32_t calc_crc32(const void *buffer, unsigned long length);
+private:
+    static const unsigned int crctab[256];
+};
+
 #define OBJECT_GENERATOR_KEY_ITERATORS  2 /* number of iterators */
 #define OBJECT_GENERATOR_KEY_SET_ITER   1
 #define OBJECT_GENERATOR_KEY_GET_ITER   0
@@ -110,8 +119,8 @@ protected:
     unsigned int m_value_buffer_size;
     unsigned int m_value_buffer_mutation_pos;
     
-    void alloc_value_buffer(void);
-    void alloc_value_buffer(const char* copy_from);
+    virtual void alloc_value_buffer(void);
+    virtual void alloc_value_buffer(const char* copy_from);
     void random_init(void);
     unsigned long long get_key_index(int iter);
 public:    
@@ -175,6 +184,25 @@ public:
     virtual data_object* get_object(int iter);
 
     bool open_file(void);
+};
+
+class crc_object_generator : public object_generator {
+protected:
+    unsigned int m_crc_size;
+    unsigned int m_actual_value_size;
+    char *m_crc_buffer;
+
+    virtual void alloc_value_buffer(void);
+    virtual void alloc_value_buffer(const char* copy_from);
+public:
+    explicit crc_object_generator();
+    crc_object_generator(const crc_object_generator& from);
+    virtual ~crc_object_generator() {}
+    virtual crc_object_generator* clone(void);
+
+    virtual data_object* get_object(int iter);
+    unsigned int get_actual_value_size();
+    void reset_next_key();
 };
 
 #endif /* _OBJ_GEN_H */

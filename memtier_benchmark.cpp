@@ -104,6 +104,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         "data_import = %s\n"
         "data_verify = %s\n"
         "verify_only = %s\n"
+        "crc_verify = %s\n"
         "generate_keys = %s\n"
         "key_prefix = %s\n"
         "key_minimum = %llu\n"
@@ -146,6 +147,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->data_import,
         cfg->data_verify ? "yes" : "no",
         cfg->verify_only ? "yes" : "no",
+        cfg->crc_verify ? "yes" : "no",
         cfg->generate_keys ? "yes" : "no",
         cfg->key_prefix,
         cfg->key_minimum,
@@ -196,6 +198,7 @@ static void config_print_to_json(json_handler * jsonhandler, struct benchmark_co
     jsonhandler->write_obj("data_import"       ,"\"%s\"",       cfg->data_import);
     jsonhandler->write_obj("data_verify"       ,"\"%s\"",       cfg->data_verify ? "true" : "false");
     jsonhandler->write_obj("verify_only"       ,"\"%s\"",       cfg->verify_only ? "true" : "false");
+    jsonhandler->write_obj("crc_verify"        ,"\"%s\"",       cfg->crc_verify ? "true" : "false");
     jsonhandler->write_obj("generate_keys"     ,"\"%s\"",     	cfg->generate_keys ? "true" : "false");
     jsonhandler->write_obj("key_prefix"        ,"\"%s\"",       cfg->key_prefix);
     jsonhandler->write_obj("key_minimum"       ,"%11u",        	cfg->key_minimum);
@@ -232,7 +235,7 @@ static void config_init_defaults(struct benchmark_config *cfg)
     if (!cfg->taskset.is_defined() && cfg->cpu_split)
         cfg->taskset = config_cpu_list(get_nprocs());
     if (!cfg->ratio.is_defined())
-        cfg->ratio = config_ratio("1:10");
+        cfg->ratio = cfg->crc_verify ? config_ratio("1:0") : config_ratio("1:10");
     if (!cfg->pipeline)
         cfg->pipeline = 1;
     if (!cfg->data_size && !cfg->data_size_list.is_defined() && !cfg->data_size_range.is_defined() && !cfg->data_import)
@@ -306,7 +309,8 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_wait_timeout, 
         o_json_out_file,
         o_cpu_split,
-        o_taskset
+        o_taskset,
+        o_crc_verify
     };
     
     static struct option long_options[] = {
@@ -340,6 +344,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         { "data-import",                1, 0, o_data_import },
         { "data-verify",                0, 0, o_data_verify },
         { "verify-only",                0, 0, o_verify_only },
+        { "crc-verify",                 0, 0, o_crc_verify },
         { "generate-keys",              0, 0, o_generate_keys },
         { "key-prefix",                 1, 0, o_key_prefix },
         { "key-minimum",                1, 0, o_key_minimum },
@@ -502,6 +507,10 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                         fprintf(stderr, "error: ratio must be expressed as [0-n]:[0-n].\n");
                         return -1;
                     }
+                    if (cfg->crc_verify) {
+                        fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
+                        return -1;
+                    }
                     break;
                 case o_pipeline:
                     endptr = NULL;
@@ -568,6 +577,13 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                 case o_verify_only:
                     cfg->verify_only = 1;
                     cfg->data_verify = 1;   // Implied
+                    break;
+                case o_crc_verify:
+                    cfg->crc_verify = true;
+                    if (cfg->ratio.is_defined()) {
+                        fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
+                        return -1;
+                    }
                     break;
                 case o_key_prefix:
                     cfg->key_prefix = optarg;
@@ -734,6 +750,7 @@ void usage() {
             "      --data-import=FILE         Read object data from file\n"
             "      --data-verify              Enable data verification when test is complete\n"
             "      --verify-only              Only perform --data-verify, without any other test\n"
+            "      --crc-verify               Perform test using crc verification\n"
             "      --generate-keys            Generate keys for imported objects\n"
             "      --no-expiry                Ignore expiry information in imported data\n"
             "\n"
@@ -1044,7 +1061,7 @@ int main(int argc, char *argv[])
     // create and configure object generator
     object_generator* obj_gen = NULL;
     imported_keylist* keylist = NULL;
-    if (!cfg.data_import) {
+    if (!cfg.data_import && !cfg.crc_verify) {
         if (cfg.data_verify) {
             fprintf(stderr, "error: use data-verify only with data-import\n");
             exit(1);
@@ -1053,8 +1070,28 @@ int main(int argc, char *argv[])
             fprintf(stderr, "error: use no-expiry only with data-import\n");
             exit(1);
         }
-        
         obj_gen = new object_generator();
+        assert(obj_gen != NULL);
+    }
+    else if (cfg.crc_verify) {
+        if (cfg.data_verify) {
+            fprintf(stderr, "error: use data-verify only with data-import\n");
+            exit(1);
+        }
+        if (cfg.no_expiry) {
+            fprintf(stderr, "error: use no-expiry only with data-import\n");
+            exit(1);
+        }
+        if (cfg.data_size_list.is_defined() ||
+            cfg.data_size_range.is_defined()) {
+            fprintf(stderr, "error: crc verification can only be used with fixed data size.\n");
+            exit(1);
+        }
+        if (!strcmp(cfg.key_pattern, "P:P")==0) {
+            fprintf(stderr, "error: crc verification can only be used with P:P key pattern.\n");
+            exit(1);
+        }
+        obj_gen = new crc_object_generator();
         assert(obj_gen != NULL);
     } else {
         // check paramters
@@ -1257,6 +1294,39 @@ int main(int argc, char *argv[])
                         client->get_verified_keys(),
                         client->get_errors());
         
+        if (jsonhandler != NULL){
+            jsonhandler->open_nesting("client verifications results");
+            jsonhandler->write_obj("keys verified successfuly", "%-10llu",  client->get_verified_keys());
+            jsonhandler->write_obj("keys failed", "%-10llu",  client->get_errors());
+            jsonhandler->close_nesting();
+        }
+
+        // Clean up...
+        delete client;
+        delete verify_protocol;
+        event_base_free(verify_event_base);
+    }
+
+    // If needed, crc data verification is done now...
+    //TODO: maybe unify the above if and the this if into one function
+    if (cfg.crc_verify) {
+        struct event_base *verify_event_base = event_base_new();
+        abstract_protocol *verify_protocol = protocol_factory(cfg.protocol);
+        dynamic_cast<crc_object_generator*>(obj_gen)->reset_next_key();
+        crc_verify_client *client = new crc_verify_client(verify_event_base, &cfg, verify_protocol, obj_gen);
+
+        fprintf(outfile, "\n\nPerforming CRC data verification...\n");
+
+        // Run client in verification mode
+        client->prepare();
+        event_base_dispatch(verify_event_base);
+
+        fprintf(outfile, "Data verification completed:\n"
+                        "%-10llu keys verified successfuly.\n"
+                        "%-10llu keys failed.\n",
+                client->get_verified_keys(),
+                client->get_errors());
+
         if (jsonhandler != NULL){
             jsonhandler->open_nesting("client verifications results");
             jsonhandler->write_obj("keys verified successfuly", "%-10llu",  client->get_verified_keys());

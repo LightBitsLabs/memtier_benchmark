@@ -188,7 +188,7 @@ protected:
 
     bool send_conn_setup_commands(struct timeval timestamp);
     bool is_conn_setup_done(void);
-    void fill_pipeline(void);
+    virtual void fill_pipeline(void);
     void process_first_request(void);
     void process_response(void);
 public:
@@ -228,6 +228,34 @@ protected:
     virtual void handle_response(struct timeval timestamp, request *request, protocol_response *response);
 public:
     verify_client(struct event_base *event_base, benchmark_config *config, abstract_protocol *protocol, object_generator *obj_gen);
+    unsigned long long int get_verified_keys(void);
+    unsigned long long int get_errors(void);
+};
+
+class crc_verify_client : public client {
+protected:
+    struct verify_request : public request {
+        char *m_key;
+        unsigned int m_key_len;
+
+        verify_request(request_type type,
+                       unsigned int size,
+                       struct timeval* sent_time,
+                       unsigned int keys,
+                       const char *key,
+                       unsigned int key_len);
+        virtual ~verify_request(void);
+    };
+    bool m_finished;
+    unsigned long long int m_verified_keys;
+    unsigned long long int m_errors;
+
+    virtual bool finished(void);
+    virtual void create_request(struct timeval timestamp);
+    virtual void handle_response(struct timeval timestamp, request *request, protocol_response *response);
+    virtual void fill_pipeline(void);
+public:
+    crc_verify_client(struct event_base *event_base, benchmark_config *config, abstract_protocol *protocol, object_generator *obj_gen);
     unsigned long long int get_verified_keys(void);
     unsigned long long int get_errors(void);
 };
