@@ -1307,6 +1307,39 @@ int main(int argc, char *argv[])
         event_base_free(verify_event_base);
     }
 
+    // If needed, crc data verification is done now...
+    //TODO: maybe unify the above if and the this if into one function
+    if (cfg.crc_verify) {
+        struct event_base *verify_event_base = event_base_new();
+        abstract_protocol *verify_protocol = protocol_factory(cfg.protocol);
+        dynamic_cast<crc_object_generator*>(obj_gen)->reset_next_key();
+        crc_verify_client *client = new crc_verify_client(verify_event_base, &cfg, verify_protocol, obj_gen);
+
+        fprintf(outfile, "\n\nPerforming CRC data verification...\n");
+
+        // Run client in verification mode
+        client->prepare();
+        event_base_dispatch(verify_event_base);
+
+        fprintf(outfile, "Data verification completed:\n"
+                        "%-10llu keys verified successfuly.\n"
+                        "%-10llu keys failed.\n",
+                client->get_verified_keys(),
+                client->get_errors());
+
+        if (jsonhandler != NULL){
+            jsonhandler->open_nesting("client verifications results");
+            jsonhandler->write_obj("keys verified successfuly", "%-10llu",  client->get_verified_keys());
+            jsonhandler->write_obj("keys failed", "%-10llu",  client->get_errors());
+            jsonhandler->close_nesting();
+        }
+
+        // Clean up...
+        delete client;
+        delete verify_protocol;
+        event_base_free(verify_event_base);
+    }
+
     if (outfile != stdout) {
         fclose(outfile);
     }
