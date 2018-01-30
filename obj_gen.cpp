@@ -430,7 +430,7 @@ data_object* object_generator::get_object(int iter)
 
     // set object
     m_object.set_key(m_key_buffer, strlen(m_key_buffer));
-    m_object.set_value(m_value_buffer, new_size);
+    m_object.add_value(m_value_buffer, new_size, true);
     m_object.set_expiry(expiry);    
     
     return &m_object;
@@ -440,9 +440,10 @@ data_object* object_generator::get_object(int iter)
 
 data_object::data_object() :
     m_key(NULL), m_key_len(0),
-    m_value(NULL), m_value_len(0),
+    m_total_buffers_len(0),
     m_expiry(0)
 {
+    m_values_list = new val_list();
 }
 
 data_object::~data_object()
@@ -454,9 +455,13 @@ void data_object::clear(void)
 {
     m_key = NULL;
     m_key_len = 0;
-    m_value = NULL;
-    m_value_len = 0;
+    m_total_buffers_len = 0;
     m_expiry = 0;
+    if (m_values_list)
+    {
+        m_values_list->clear();	
+    }
+    delete m_values_list;
 }
 
 void data_object::set_key(const char* key, unsigned int key_len)
@@ -473,18 +478,29 @@ const char* data_object::get_key(unsigned int* key_len)
     return m_key;
 }
 
-void data_object::set_value(const char* value, unsigned int value_len)
+void data_object::add_value(const char* value, unsigned int value_len, bool clear_list)
 {
-    m_value = value;
-    m_value_len = value_len;
+    if (clear_list) {
+        m_values_list->clear();
+        m_total_buffers_len = 0;
+    }
+    m_values_list->push_back(std::make_pair(value,value_len));
+    m_total_buffers_len += value_len;
 }
 
-const char* data_object::get_value(unsigned int *value_len)
+const val_list* data_object::get_values()
 {
-    assert(value_len != NULL);
-    *value_len = m_value_len;
+    assert(!m_values_list->empty());
+    return m_values_list;
+}
 
-    return m_value;
+const val_list* data_object::get_values(unsigned int &total_buffers_len)
+{
+    assert(m_total_buffers_len > 0);
+
+    total_buffers_len = m_total_buffers_len;
+
+    return this->get_values();
 }
 
 void data_object::set_expiry(unsigned int expiry)
@@ -625,7 +641,7 @@ data_object* import_object_generator::get_object(int iter)
     }
     m_cur_item = i;
     
-    m_object.set_value(m_cur_item->get_data(), m_cur_item->get_nbytes() - 2);
+    m_object.add_value(m_cur_item->get_data(), m_cur_item->get_nbytes() - 2, true);
     if (m_keys != NULL) {
         m_object.set_key(m_cur_item->get_key(), m_cur_item->get_nkey());
     } else {
