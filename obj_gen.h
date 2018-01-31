@@ -21,8 +21,11 @@
 
 #include <vector>
 #include <stdint.h>
+#include <list>
+#include <utility>
 #include "file_io.h"
 
+typedef std::list<std::pair<const char*, unsigned int> > val_list;
 struct random_data;
 struct config_weight_list;
 
@@ -55,8 +58,8 @@ class data_object {
 protected:    
     const char *m_key;
     unsigned int m_key_len;
-    const char *m_value;
-    unsigned int m_value_len;
+    val_list *m_values_list;
+    unsigned int m_total_buffers_len;
     unsigned int m_expiry;
 public:
     data_object();
@@ -66,7 +69,9 @@ public:
     void set_key(const char* key, unsigned int key_len);
     const char* get_key(unsigned int* key_len);
     void set_value(const char* value, unsigned int value_len);
-    const char* get_value(unsigned int* value_len);
+    void add_value(const char* value, unsigned int value_len);
+    const val_list* get_values(unsigned int &total_buffers_len);
+    const val_list* get_values();
     void set_expiry(unsigned int expiry);
     unsigned int get_expiry(void);    
 };
