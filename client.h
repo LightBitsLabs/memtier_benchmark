@@ -197,7 +197,7 @@ protected:
 
     bool send_conn_setup_commands(struct timeval timestamp);
     bool is_conn_setup_done(void);
-    void fill_pipeline(void);
+    virtual void fill_pipeline(void);
     void process_first_request(void);
     void process_response(void);
 public:
