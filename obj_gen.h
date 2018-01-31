@@ -107,6 +107,7 @@ protected:
     bool m_random_data;
     unsigned int m_expiry_min;
     unsigned int m_expiry_max;
+    unsigned int m_compress_perc;
     const char *m_key_prefix;
     unsigned long long m_key_min;
     unsigned long long m_key_max;
@@ -119,9 +120,11 @@ protected:
     unsigned long long m_key_index;
     char m_key_buffer[250];
     char *m_value_buffer;
+    char *m_zeros_buffer;
     int m_random_fd;
     gaussian_noise m_random;
     unsigned int m_value_buffer_size;
+    unsigned int  m_zeros_buffer_size;
     unsigned int m_value_buffer_mutation_pos;
     
     virtual void alloc_value_buffer(void);
@@ -137,6 +140,7 @@ public:
     unsigned long long random_range(unsigned long long r_min, unsigned long long r_max);
     unsigned long long normal_distribution(unsigned long long r_min, unsigned long long r_max, double r_stddev, double r_median);
 
+    void set_compress_precentile(unsigned int compress_perc);
     void set_random_data(bool random_data);
     void set_data_size_fixed(unsigned int size);
     void set_data_size_range(unsigned int size_min, unsigned int size_max);
@@ -194,7 +198,6 @@ public:
 class crc_object_generator : public object_generator {
 protected:
     unsigned int m_crc_size;
-    unsigned int m_actual_value_size;
     char *m_crc_buffer;
 
     virtual void alloc_value_buffer(void);
@@ -202,11 +205,12 @@ protected:
 public:
     explicit crc_object_generator();
     crc_object_generator(const crc_object_generator& from);
-    virtual ~crc_object_generator() {}
+    virtual ~crc_object_generator();
     virtual crc_object_generator* clone(void);
 
     virtual data_object* get_object(int iter);
     unsigned int get_actual_value_size();
+    unsigned int get_crc_position();
     void reset_next_key();
 };
 

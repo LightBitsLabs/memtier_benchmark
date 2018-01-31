@@ -947,8 +947,8 @@ void crc_verify_client::handle_response(struct timeval timestamp, request *reque
                             vr->m_key_len, vr->m_key, response->get_status());
         m_errors++;
     } else {
-        uint32_t crc = crc32::calc_crc32(rvalue, rvalue_len - crc32::size);
-        const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator *>(m_obj_gen)->get_actual_value_size();
+        uint32_t crc = crc32::calc_crc32(rvalue, dynamic_cast<crc_object_generator *>(m_obj_gen)->get_actual_value_size());
+        const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator *>(m_obj_gen)->get_crc_position();
         if (memcmp(crc_buffer, &crc, crc32::size) == 0) {
             benchmark_debug_log("key: [%.*s] verified successfuly.\n",
                                 vr->m_key_len, vr->m_key);

@@ -206,6 +206,7 @@ object_generator::object_generator() :
     m_random_data(false),
     m_expiry_min(0),
     m_expiry_max(0),
+    m_compress_perc(0),
     m_key_prefix(NULL),
     m_key_min(0),
     m_key_max(0),
@@ -229,14 +230,17 @@ object_generator::object_generator(const object_generator& copy) :
     m_random_data(copy.m_random_data),
     m_expiry_min(copy.m_expiry_min),
     m_expiry_max(copy.m_expiry_max),
+    m_compress_perc(copy.m_compress_perc),
     m_key_prefix(copy.m_key_prefix),
     m_key_min(copy.m_key_min),
     m_key_max(copy.m_key_max),
     m_key_stddev(copy.m_key_stddev),
     m_key_median(copy.m_key_median),
     m_value_buffer(NULL),
+    m_zeros_buffer(NULL),
     m_random_fd(-1),
     m_value_buffer_size(0),
+    m_zeros_buffer_size(0),
     m_value_buffer_mutation_pos(0)
 {
     if (m_data_size_type == data_size_weighted &&
@@ -252,6 +256,8 @@ object_generator::~object_generator()
 {
     if (m_value_buffer != NULL)
         free(m_value_buffer);
+    if (m_zeros_buffer != NULL)
+        free(m_zeros_buffer);
     if (m_data_size_type == data_size_weighted &&
         m_data_size.size_list != NULL) {
         delete m_data_size.size_list;
@@ -279,6 +285,9 @@ void object_generator::alloc_value_buffer(void)
     if (m_value_buffer != NULL)
         free(m_value_buffer), m_value_buffer = NULL;
 
+    if (m_zeros_buffer != NULL)
+        free(m_zeros_buffer), m_zeros_buffer = NULL;
+
     if (m_data_size_type == data_size_fixed) 
         size = m_data_size.size_fixed;
     else if (m_data_size_type == data_size_range)
@@ -287,7 +296,14 @@ void object_generator::alloc_value_buffer(void)
         size = m_data_size.size_list->largest();
     }
 
-    m_value_buffer_size = size;
+    if (!m_compress_perc)
+        m_value_buffer_size = size;
+    else {
+        float decimal = static_cast<float>(m_compress_perc)/100;
+        m_value_buffer_size = static_cast<unsigned int>(size*(1-decimal));
+        m_zeros_buffer_size = size - m_value_buffer_size;
+        m_zeros_buffer = (char*) calloc(m_zeros_buffer_size,1);
+    }
     if (size > 0) {
         m_value_buffer = (char*) malloc(m_value_buffer_size);
         assert(m_value_buffer != NULL);
@@ -336,6 +352,8 @@ void object_generator::alloc_value_buffer(const char* copy_from)
 
     if (m_value_buffer != NULL)
         free(m_value_buffer), m_value_buffer = NULL;
+    if (m_zeros_buffer != NULL)
+        free(m_zeros_buffer), m_zeros_buffer = NULL;
 
     if (m_data_size_type == data_size_fixed)
         size = m_data_size.size_fixed;
@@ -344,12 +362,24 @@ void object_generator::alloc_value_buffer(const char* copy_from)
     else if (m_data_size_type == data_size_weighted)
         size = m_data_size.size_list->largest();
 
-    m_value_buffer_size = size;
+    if (!m_compress_perc)
+        m_value_buffer_size = size;
+    else {
+        m_value_buffer_size = (float)size*(1-(float)m_compress_perc/100);
+        m_zeros_buffer_size = size - m_value_buffer_size;
+        m_zeros_buffer = (char*) calloc(m_zeros_buffer_size,1);
+    }
     if (m_value_buffer_size > 0) {
         m_value_buffer = (char*) malloc(m_value_buffer_size);
+        m_zeros_buffer = (char*) calloc(m_value_buffer_size,1);
         assert(m_value_buffer != NULL);
         memcpy(m_value_buffer, copy_from, m_value_buffer_size);
     }
+}
+
+void object_generator::set_compress_precentile(unsigned int compress_perc)
+{
+    m_compress_perc = compress_perc;
 }
 
 void object_generator::set_random_data(bool random_data)
@@ -464,6 +494,7 @@ data_object* object_generator::get_object(int iter)
     (void) get_key(iter, NULL);
     
     // compute size
+    unsigned int data_size = 0;
     unsigned int new_size = 0;
     if (m_data_size_type == data_size_fixed) {
         new_size = m_data_size.size_fixed;
@@ -480,6 +511,11 @@ data_object* object_generator::get_object(int iter)
     } else {
         assert(0);
     }
+
+    if (!m_compress_perc)
+        data_size = new_size;
+    else
+        data_size = static_cast<unsigned int>(new_size * (1 - m_compress_perc / 100.0));
     
     // compute expiry
     int expiry = 0;
@@ -490,13 +526,16 @@ data_object* object_generator::get_object(int iter)
     // modify object content in case of random data
     if (m_random_data) {
         m_value_buffer[m_value_buffer_mutation_pos++]++;
-        if (m_value_buffer_mutation_pos >= m_value_buffer_size)
+        if (m_value_buffer_mutation_pos >= data_size)
             m_value_buffer_mutation_pos = 0;
     }
 
     // set object
     m_object.set_key(m_key_buffer, strlen(m_key_buffer));
-    m_object.set_value(m_value_buffer, new_size);
+    m_object.set_value(m_value_buffer, data_size);
+    if (m_compress_perc) {
+        m_object.add_value(m_zeros_buffer, new_size-data_size);
+    }
     m_object.set_expiry(expiry);    
     
     return &m_object;
@@ -741,10 +780,15 @@ crc_object_generator::crc_object_generator() :
 
 crc_object_generator::crc_object_generator(const crc_object_generator& from) :
         object_generator(from),
-        m_crc_size(from.m_crc_size),
-        m_actual_value_size(from.m_actual_value_size)
+        m_crc_size(from.m_crc_size)
 {
-    m_crc_buffer = m_value_buffer + m_actual_value_size;
+    m_crc_buffer = (char*) malloc(m_crc_size);
+}
+
+crc_object_generator::~crc_object_generator()
+{
+    if (m_crc_buffer != NULL)
+        free(m_crc_buffer), m_crc_buffer = NULL;
 }
 
 crc_object_generator* crc_object_generator::clone(void)
@@ -755,14 +799,19 @@ crc_object_generator* crc_object_generator::clone(void)
 void crc_object_generator::alloc_value_buffer(void)
 {
     object_generator::alloc_value_buffer();
-    m_actual_value_size = m_value_buffer_size - m_crc_size;
-    m_crc_buffer = m_value_buffer + m_actual_value_size;
+    if (m_crc_buffer != NULL)
+        free(m_crc_buffer), m_crc_buffer = NULL;
+    m_crc_buffer = (char*) malloc(m_crc_size);
 }
 
 void crc_object_generator::alloc_value_buffer(const char* copy_from)
 {
     object_generator::alloc_value_buffer(copy_from);
-    m_crc_buffer = m_value_buffer + m_actual_value_size;
+    if (m_crc_buffer != NULL)
+        free(m_crc_buffer), m_crc_buffer = NULL;
+    m_crc_buffer = (char*) malloc(m_crc_size);
+    assert(m_crc_buffer != NULL);
+    memcpy(m_crc_buffer, copy_from, m_crc_size);
 }
 
 data_object* crc_object_generator::get_object(int iter)
@@ -771,12 +820,20 @@ data_object* crc_object_generator::get_object(int iter)
     get_key(iter, NULL);
 
     // compute size
+    unsigned int data_size = 0;
     unsigned int new_size = 0;
     if (m_data_size_type == data_size_fixed) {
         new_size = m_data_size.size_fixed;
     } else {
         assert(0);
     }
+
+    new_size = new_size - m_crc_size;
+
+    if (!m_compress_perc)
+        data_size = new_size;
+    else
+        data_size = static_cast<unsigned int>(new_size * (1 - m_compress_perc/100.0)); 
 
     // compute expiry
     int expiry = 0;
@@ -787,17 +844,24 @@ data_object* crc_object_generator::get_object(int iter)
     // modify object content in case of random data
     if (m_random_data) {
         m_value_buffer[m_value_buffer_mutation_pos++]++;
-        if (m_value_buffer_mutation_pos >= m_actual_value_size)
+        if (m_value_buffer_mutation_pos >= data_size)
             m_value_buffer_mutation_pos = 0;
     }
 
     //calc and set crc
-    uint32_t crc = crc32::calc_crc32(m_value_buffer, m_actual_value_size);
+    uint32_t crc = crc32::calc_crc32(m_value_buffer, data_size);
     memcpy(m_crc_buffer, &crc, m_crc_size);
 
     // set object
     m_object.set_key(m_key_buffer, strlen(m_key_buffer));
-    m_object.set_value(m_value_buffer, new_size);
+    m_object.set_value(m_value_buffer, data_size);
+
+    if (!m_compress_perc)
+        m_object.add_value(m_crc_buffer, m_crc_size);
+    else {
+        m_object.add_value(m_zeros_buffer, new_size-data_size);
+        m_object.add_value(m_crc_buffer, m_crc_size);
+    }
     m_object.set_expiry(expiry);
 
     return &m_object;
@@ -805,7 +869,15 @@ data_object* crc_object_generator::get_object(int iter)
 
 unsigned int crc_object_generator::get_actual_value_size()
 {
-    return m_actual_value_size;
+    if (!m_compress_perc)
+        return m_value_buffer_size-m_crc_size;
+    unsigned int new_size = m_zeros_buffer_size + m_value_buffer_size - m_crc_size;
+    return static_cast<unsigned int>(new_size * (1-m_compress_perc / 100.0));
+}
+
+unsigned int crc_object_generator::get_crc_position()
+{
+    return m_value_buffer_size + m_zeros_buffer_size - m_crc_size;
 }
 
 void crc_object_generator::reset_next_key()

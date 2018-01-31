@@ -90,6 +90,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         "clients = %u\n"
         "threads = %u\n"
         "cpu_split = %s\n"
+        "compress_perc = %d\n"
         "taskset = %s\n"
         "test_time = %u\n"
         "ratio = %u:%u\n"
@@ -133,6 +134,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->clients,
         cfg->threads,
         cfg->cpu_split ? "yes" : "no",
+        cfg->compress_perc,
         cfg->taskset.print(taskset_buf, sizeof(taskset_buf)-1),
         cfg->test_time,
         cfg->ratio.a, cfg->ratio.b,
@@ -184,6 +186,7 @@ static void config_print_to_json(json_handler * jsonhandler, struct benchmark_co
     jsonhandler->write_obj("clients"           ,"%u",          	cfg->clients);
     jsonhandler->write_obj("threads"           ,"%u",          	cfg->threads);
     jsonhandler->write_obj("cpu_split"         ,"\"%s\"",      	cfg->cpu_split ? "true" : "false");
+    jsonhandler->write_obj("compress_prec"     ,"\"%u\"",      	cfg->compress_perc);
     jsonhandler->write_obj("taskset"           ,"\"%s\"",      	cfg->taskset.print(tmpbuf, sizeof(tmpbuf)-1));
     jsonhandler->write_obj("test_time"         ,"%u",          	cfg->test_time);
     jsonhandler->write_obj("ratio"             ,"\"%u:%u\"",   	cfg->ratio.a, cfg->ratio.b);
@@ -310,7 +313,8 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_json_out_file,
         o_cpu_split,
         o_taskset,
-        o_crc_verify
+        o_crc_verify,
+        o_compress_perc,
     };
     
     static struct option long_options[] = {
@@ -330,6 +334,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         { "clients",                    1, 0, 'c' },
         { "threads",                    1, 0, 't' },        
         { "cpu-split",                  0, 0, o_cpu_split },
+        { "compress-perc",              1, 0, o_compress_perc },
         { "taskset",                    1, 0, o_taskset },
         { "test-time",                  1, 0, o_test_time },
         { "ratio",                      1, 0, o_ratio },
@@ -466,6 +471,14 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                     cfg->threads = (unsigned int) strtoul(optarg, &endptr, 10);
                     if (!cfg->threads || !endptr || *endptr != '\0') {
                         fprintf(stderr, "error: threads must be greater than zero.\n");
+                        return -1;
+                    }
+                    break;
+                case o_compress_perc:
+                    endptr = NULL;
+                    cfg->compress_perc = (unsigned int) strtoul(optarg, &endptr, 10);
+                    if (cfg->compress_perc >= 100 || !endptr || *endptr != '\0') {
+                        fprintf(stderr, "error: compression precentile must be between 0 to 99");
                         return -1;
                     }
                     break;
@@ -720,6 +733,7 @@ void usage() {
             "                                 use 'allkeys' to run on the entire key-range\n"
             "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
             "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
+            "      --compress-perc=NUMBER     NUMBER represents precentile for which the data is at least compressible\n"
             "      --cpu-split                Each thread will run on a single cpu\n"
             "      --taskset=LIST             Use cpus from taskset to run threads on\n"
             "      --test-time=SECS           Number of seconds to run the test\n"
@@ -1158,6 +1172,10 @@ int main(int argc, char *argv[])
     if (cfg.select_db > 0 && strcmp(cfg.protocol, "redis")) {
         fprintf(stderr, "error: select-db can only be used with redis protocol.\n");
         usage();
+    }
+
+    if (cfg.compress_perc > 0) {
+        obj_gen->set_compress_precentile(cfg.compress_perc);
     }
     if (cfg.data_offset > 0) {
         if (cfg.data_offset > (1<<29)-1) {
