@@ -20,8 +20,11 @@
 #define _OBJ_GEN_H
 
 #include <vector>
+#include <list>
+#include <utility>
 #include "file_io.h"
 
+typedef std::list<std::pair<const char*, unsigned int> > val_list;
 struct random_data;
 struct config_weight_list;
 
@@ -54,8 +57,8 @@ class data_object {
 protected:    
     const char *m_key;
     unsigned int m_key_len;
-    const char *m_value;
-    unsigned int m_value_len;
+    val_list *m_values_list;
+    unsigned int m_total_buffers_len;
     unsigned int m_expiry;
 public:
     data_object();
@@ -64,8 +67,9 @@ public:
     void clear(void);
     void set_key(const char* key, unsigned int key_len);
     const char* get_key(unsigned int* key_len);
-    void set_value(const char* value, unsigned int value_len);
-    const char* get_value(unsigned int* value_len);
+    void add_value(const char* value, unsigned int value_leni, bool clear_list = false);
+    const val_list* get_values(unsigned int &total_buffers_len);
+    const val_list* get_values();
     void set_expiry(unsigned int expiry);
     unsigned int get_expiry(void);    
 };
@@ -93,6 +97,7 @@ protected:
     bool m_random_data;
     unsigned int m_expiry_min;
     unsigned int m_expiry_max;
+    unsigned int m_compress_perc;
     const char *m_key_prefix;
     unsigned long long m_key_min;
     unsigned long long m_key_max;
@@ -105,9 +110,11 @@ protected:
     unsigned long long m_key_index;
     char m_key_buffer[250];
     char *m_value_buffer;
+    char *m_zeros_buffer;
     int m_random_fd;
     gaussian_noise m_random;
     unsigned int m_value_buffer_size;
+    unsigned int  m_zeros_buffer_size;
     unsigned int m_value_buffer_mutation_pos;
     
     void alloc_value_buffer(void);
@@ -123,6 +130,7 @@ public:
     unsigned long long random_range(unsigned long long r_min, unsigned long long r_max);
     unsigned long long normal_distribution(unsigned long long r_min, unsigned long long r_max, double r_stddev, double r_median);
 
+    void set_compress_precentile(unsigned int compress_perc);
     void set_random_data(bool random_data);
     void set_data_size_fixed(unsigned int size);
     void set_data_size_range(unsigned int size_min, unsigned int size_max);
