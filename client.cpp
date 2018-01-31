@@ -524,15 +524,15 @@ void client::create_request(struct timeval timestamp)
         data_object *obj = m_obj_gen->get_object(obj_iter_type(m_config, 0));
         unsigned int key_len;
         const char *key = obj->get_key(&key_len);
-        unsigned int value_len;
-        const char *value = obj->get_value(&value_len);
+        unsigned int total_buffers_len;
+        const val_list* values_list = obj->get_values(total_buffers_len);
 
         m_set_ratio_count++;
         m_tot_set_ops++;
 
         benchmark_debug_log("SET key=[%.*s] value_len=%u expiry=%u\n",
-            key_len, key, value_len, obj->get_expiry());
-        cmd_size = m_protocol->write_command_set(key, key_len, value, value_len,
+            key_len, key, total_buffers_len, obj->get_expiry());
+        cmd_size = m_protocol->write_command_set(key, key_len, values_list, total_buffers_len,
             obj->get_expiry(), m_config->data_offset);
 
         m_pipeline.push(new client::request(rt_set, cmd_size, &timestamp, 1));
@@ -796,15 +796,14 @@ void verify_client::create_request(struct timeval timestamp)
         data_object *obj = m_obj_gen->get_object(obj_iter_type(m_config, 0));
         unsigned int key_len;
         const char *key = obj->get_key(&key_len);
-        unsigned int value_len;
-        const char *value = obj->get_value(&value_len);
+        std::pair<const char*,unsigned int> value_info = obj->get_values()->front();
         unsigned int cmd_size;
 
         m_set_ratio_count++;
         cmd_size = m_protocol->write_command_get(key, key_len, m_config->data_offset);
 
         m_pipeline.push(new verify_client::verify_request(rt_get,
-            cmd_size, &timestamp, 1, key, key_len, value, value_len));
+            cmd_size, &timestamp, 1, key, key_len, value_info.first, value_info.second));
     } else if (m_get_ratio_count < m_config->ratio.b) {
         // We don't really care about GET operations, all we do here is keep
         // the object generator synced.
@@ -874,6 +873,93 @@ bool verify_client::finished(void)
     if (m_config->requests > 0 && m_reqs_processed >= m_config->requests)
         return true;
     return false;
+}
+
+///////////////////////////////////////////////////////////////////////////
+
+crc_verify_client::verify_request::verify_request(request_type type,
+                                              unsigned int size,
+                                              struct timeval* sent_time,
+                                              unsigned int keys,
+                                              const char *key,
+                                              unsigned int key_len) :
+        client::request(type, size, sent_time, keys),
+        m_key(NULL), m_key_len(0)
+{
+    m_key_len = key_len;
+    m_key = new char[key_len];
+    memcpy(m_key, key, m_key_len);
+}
+
+crc_verify_client::verify_request::~verify_request(void)
+{
+    delete[] m_key;
+    m_key = NULL;
+}
+
+crc_verify_client::crc_verify_client(verify_client_group* group) :
+        client(dynamic_cast<client_group*>(group)),
+        m_verified_keys(0), m_errors(0)
+{
+    m_protocol->set_keep_value(true);
+}
+
+unsigned long int crc_verify_client::get_verified_keys(void)
+{
+    return m_verified_keys;
+}
+
+unsigned long int crc_verify_client::get_errors(void)
+{
+    return m_errors;
+}
+
+void crc_verify_client::create_request(struct timeval timestamp)
+{
+    // Prepare a GET request that will be compared against a previous
+    // SET request.
+    unsigned int cmd_size;
+    int iter = obj_iter_type(m_config, 2);
+    unsigned int keylen;
+    const char *key = m_obj_gen->get_key(iter, &keylen);
+    assert(key != NULL);
+    assert(keylen > 0);
+
+    benchmark_debug_log("CRC verify: GET key=[%.*s]\n", keylen, key);
+    cmd_size = m_protocol->write_command_get(key, keylen, m_config->data_offset);
+    m_pipeline.push(new crc_verify_client::verify_request(rt_get, cmd_size, &timestamp, 1, key, keylen));
+}
+
+void crc_verify_client::handle_response(struct timeval timestamp, request *request, protocol_response *response)
+{
+    unsigned int rvalue_len;
+    const char *rvalue = response->get_value(&rvalue_len);
+    verify_request *vr = static_cast<verify_request *>(request);
+
+    assert(vr->m_type == rt_get);
+    m_stats.update_get_op(&timestamp,
+                          request->m_size + response->get_total_len(),
+                          ts_diff(request->m_sent_time, timestamp),
+                          response->get_hits(),
+                          request->m_keys - response->get_hits());
+    if (response->is_error() || !rvalue) {
+        benchmark_error_log("error: request for key [%.*s] failed: %s\n",
+                            vr->m_key_len, vr->m_key, response->get_status());
+        m_errors++;
+    } else {
+        uint32_t crc = crc32::calc_crc32(rvalue, dynamic_cast<crc_object_generator *>(m_obj_gen)->get_actual_value_size());
+        const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator *>(m_obj_gen)->get_crc_position();
+        if (memcmp(crc_buffer, &crc, crc32::size) == 0) {
+            benchmark_debug_log("key: [%.*s] verified successfuly.\n",
+                                vr->m_key_len, vr->m_key);
+            m_verified_keys++;
+        } else {
+            benchmark_error_log("error: key [%.*s]: verification failed. Expected hash: %u, present hash: %u.\n",
+                                vr->m_key_len, vr->m_key,
+                                crc, *(uint32_t *) crc_buffer);
+            m_errors++;
+        }
+    }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -1001,6 +1087,46 @@ void client_group::write_client_stats(const char *prefix)
         }
     }        
 }
+
+///////////////////////////////////////////////////////////////////////////
+
+verify_client_group::verify_client_group(benchmark_config *cfg, abstract_protocol *protocol, object_generator* obj_gen) :
+        client_group(cfg, protocol, obj_gen)
+{
+}
+
+int verify_client_group::create_clients(int num)
+{
+    for (int i = 0; i < num; i++) {
+        client* c = new crc_verify_client(this);
+        assert(c != NULL);
+
+        if (!c->initialized()) {
+            delete c;
+            return i;
+        }
+
+        m_clients.push_back(c);
+    }
+
+    return num;
+}
+
+void verify_client_group::merge_run_stats(run_stats* target)
+{
+    client_group::merge_run_stats(target);
+
+    unsigned long int verified_keys = 0;
+    unsigned long int errors = 0;
+    for (std::vector<client*>::iterator i = m_clients.begin(); i != m_clients.end(); i++) {
+        verified_keys += dynamic_cast<crc_verify_client*>(*i)->get_verified_keys();
+        errors += dynamic_cast<crc_verify_client*>(*i)->get_errors();
+    }
+
+    target->update_verified_keys(verified_keys);
+    target->update_errors(errors);
+}
+
 ///////////////////////////////////////////////////////////////////////////
 
 run_stats::one_second_stats::one_second_stats(unsigned int second)
@@ -1051,7 +1177,9 @@ run_stats::totals::totals() :
     m_ops_set(0),
     m_ops_get(0),
     m_ops_wait(0),
-    m_ops(0)
+    m_ops(0),
+    m_verified_keys(0),
+    m_errors(0)
 {
 }
     
@@ -1075,6 +1203,8 @@ void run_stats::totals::add(const run_stats::totals& other)
     m_ops_get += other.m_ops_get;
     m_ops_wait += other.m_ops_wait;
     m_ops += other.m_ops;
+    m_verified_keys += other.m_verified_keys;
+    m_errors += other.m_errors;
 }
 
 run_stats::run_stats() :
@@ -1160,6 +1290,16 @@ void run_stats::update_wait_op(struct timeval *ts, unsigned int latency)
     m_wait_latency_map[get_2_meaningful_digits((float)latency/1000)]++;
 }
 
+void run_stats::update_verified_keys(unsigned long int keys)
+{
+    m_totals.m_verified_keys += keys;
+}
+
+void run_stats::update_errors(unsigned long int errors)
+{
+    m_totals.m_errors += errors;
+}
+
 unsigned int run_stats::get_duration(void)
 {
     return m_cur_stats.m_second;
@@ -1189,6 +1329,16 @@ unsigned long int run_stats::get_total_ops(void)
 unsigned long int run_stats::get_total_latency(void)
 {
     return m_totals.m_latency;
+}
+
+unsigned long int run_stats::get_verified_keys()
+{
+    return m_totals.m_verified_keys;
+}
+
+unsigned long int run_stats::get_errors()
+{
+    return m_totals.m_errors;
 }
 
 #define AVERAGE(total, count) \

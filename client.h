@@ -37,6 +37,7 @@
 class client;               // forward decl
 class client_group;         // forward decl
 struct benchmark_config;
+class verify_client_group;  // forward decl
 
 class object_generator;
 class data_object;
@@ -96,6 +97,9 @@ protected:
         unsigned long int m_ops_wait;
         unsigned long int m_ops;
 
+        unsigned long int m_verified_keys;
+        unsigned long int m_errors;
+
         totals();
         void add(const totals& other);
     } m_totals;
@@ -117,6 +121,9 @@ public:
     void update_set_op(struct timeval* ts, unsigned int bytes, unsigned int latency);
     void update_wait_op(struct timeval* ts, unsigned int latency);
 
+    void update_verified_keys(unsigned long int keys);
+    void update_errors(unsigned long int errors);
+
     void aggregate_average(const std::vector<run_stats>& all_stats);
     void summarize(totals& result) const;
     void merge(const run_stats& other, int iteration);
@@ -129,6 +136,8 @@ public:
     unsigned long int get_total_bytes(void);
     unsigned long int get_total_ops(void);
     unsigned long int get_total_latency(void);
+    unsigned long int get_verified_keys();
+    unsigned long int get_errors();
  };
 
 class client {
@@ -188,7 +197,7 @@ protected:
 
     bool send_conn_setup_commands(struct timeval timestamp);
     bool is_conn_setup_done(void);
-    void fill_pipeline(void);
+    virtual void fill_pipeline(void);
     void process_first_request(void);
     void process_response(void);
 public:
@@ -232,6 +241,31 @@ public:
     unsigned long long int get_errors(void);
 };
 
+class crc_verify_client : public client {
+protected:
+    struct verify_request : public request {
+        char *m_key;
+        unsigned int m_key_len;
+
+        verify_request(request_type type,
+                       unsigned int size,
+                       struct timeval* sent_time,
+                       unsigned int keys,
+                       const char *key,
+                       unsigned int key_len);
+        virtual ~verify_request(void);
+    };
+    unsigned long int m_verified_keys;
+    unsigned long int m_errors;
+
+    virtual void create_request(struct timeval timestamp);
+    virtual void handle_response(struct timeval timestamp, request *request, protocol_response *response);
+public:
+    explicit crc_verify_client(verify_client_group* group);
+    unsigned long int get_verified_keys(void);
+    unsigned long int get_errors(void);
+};
+
 class client_group {
 protected:
     struct event_base* m_base;
@@ -241,9 +275,9 @@ protected:
     std::vector<client*> m_clients;
 public:
     client_group(benchmark_config *cfg, abstract_protocol *protocol, object_generator* obj_gen);
-    ~client_group();
+    virtual ~client_group();
 
-    int create_clients(int count);
+    virtual int create_clients(int count);
     int prepare(void);
     void run(void);
 
@@ -259,8 +293,15 @@ public:
     unsigned long int get_total_latency(void);
     unsigned long int get_duration_usec(void);
 
-    void merge_run_stats(run_stats* target);
+    virtual void merge_run_stats(run_stats* target);
 };
 
+class verify_client_group : public client_group {
+public:
+    verify_client_group(benchmark_config *cfg, abstract_protocol *protocol, object_generator* obj_gen);
+
+    virtual int create_clients(int count);
+    virtual void merge_run_stats(run_stats* target);
+};
 
 #endif	/* _CLIENT_H */

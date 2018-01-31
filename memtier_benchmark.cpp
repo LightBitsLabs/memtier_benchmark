@@ -90,6 +90,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         "clients = %u\n"
         "threads = %u\n"
         "cpu_split = %s\n"
+        "compress_perc = %d\n"
         "taskset = %s\n"
         "test_time = %u\n"
         "ratio = %u:%u\n"
@@ -104,6 +105,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         "data_import = %s\n"
         "data_verify = %s\n"
         "verify_only = %s\n"
+        "crc_verify = %s\n"
         "generate_keys = %s\n"
         "key_prefix = %s\n"
         "key_minimum = %llu\n"
@@ -132,6 +134,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->clients,
         cfg->threads,
         cfg->cpu_split ? "yes" : "no",
+        cfg->compress_perc,
         cfg->taskset.print(taskset_buf, sizeof(taskset_buf)-1),
         cfg->test_time,
         cfg->ratio.a, cfg->ratio.b,
@@ -146,6 +149,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->data_import,
         cfg->data_verify ? "yes" : "no",
         cfg->verify_only ? "yes" : "no",
+        cfg->crc_verify ? "yes" : "no",
         cfg->generate_keys ? "yes" : "no",
         cfg->key_prefix,
         cfg->key_minimum,
@@ -181,21 +185,23 @@ static void config_print_to_json(json_handler * jsonhandler, struct benchmark_co
     jsonhandler->write_obj("requests"          ,"%u",          	cfg->requests);
     jsonhandler->write_obj("clients"           ,"%u",          	cfg->clients);
     jsonhandler->write_obj("threads"           ,"%u",          	cfg->threads);
-    jsonhandler->write_obj("cpu_split"         ,"\"%s\"",              cfg->cpu_split ? "true" : "false");
-    jsonhandler->write_obj("taskset"           ,"\"%s\"",              cfg->taskset.print(tmpbuf, sizeof(tmpbuf)-1));
+    jsonhandler->write_obj("cpu_split"         ,"\"%s\"",      	cfg->cpu_split ? "true" : "false");
+    jsonhandler->write_obj("compress_prec"     ,"\"%u\"",      	cfg->compress_perc);
+    jsonhandler->write_obj("taskset"           ,"\"%s\"",      	cfg->taskset.print(tmpbuf, sizeof(tmpbuf)-1));
     jsonhandler->write_obj("test_time"         ,"%u",          	cfg->test_time);
     jsonhandler->write_obj("ratio"             ,"\"%u:%u\"",   	cfg->ratio.a, cfg->ratio.b);
     jsonhandler->write_obj("pipeline"          ,"%u",          	cfg->pipeline);
     jsonhandler->write_obj("data_size"         ,"%u",          	cfg->data_size);
     jsonhandler->write_obj("data_offset"       ,"%u",          	cfg->data_offset);
     jsonhandler->write_obj("random_data"       ,"\"%s\"",      	cfg->random_data ? "true" : "false");
-    jsonhandler->write_obj("data_size_range"   ,"\"%u:%u\"",	cfg->data_size_range.min, cfg->data_size_range.max);
-    jsonhandler->write_obj("data_size_list"    ,"\"%s\"",   	cfg->data_size_list.print(tmpbuf, sizeof(tmpbuf)-1));
-    jsonhandler->write_obj("data_size_pattern" ,"\"%s\"", 		cfg->data_size_pattern);
+    jsonhandler->write_obj("data_size_range"   ,"\"%u:%u\"",   	cfg->data_size_range.min, cfg->data_size_range.max);
+    jsonhandler->write_obj("data_size_list"    ,"\"%s\"",      	cfg->data_size_list.print(tmpbuf, sizeof(tmpbuf)-1));
+    jsonhandler->write_obj("data_size_pattern" ,"\"%s\"",      	cfg->data_size_pattern);
     jsonhandler->write_obj("expiry_range"      ,"\"%u:%u\"",   	cfg->expiry_range.min, cfg->expiry_range.max);
     jsonhandler->write_obj("data_import"       ,"\"%s\"",       cfg->data_import);
     jsonhandler->write_obj("data_verify"       ,"\"%s\"",       cfg->data_verify ? "true" : "false");
     jsonhandler->write_obj("verify_only"       ,"\"%s\"",       cfg->verify_only ? "true" : "false");
+    jsonhandler->write_obj("crc_verify"        ,"\"%s\"",       cfg->crc_verify ? "true" : "false");
     jsonhandler->write_obj("generate_keys"     ,"\"%s\"",     	cfg->generate_keys ? "true" : "false");
     jsonhandler->write_obj("key_prefix"        ,"\"%s\"",       cfg->key_prefix);
     jsonhandler->write_obj("key_minimum"       ,"%11u",        	cfg->key_minimum);
@@ -232,7 +238,7 @@ static void config_init_defaults(struct benchmark_config *cfg)
     if (!cfg->taskset.is_defined() && cfg->cpu_split)
         cfg->taskset = config_cpu_list(get_nprocs());
     if (!cfg->ratio.is_defined())
-        cfg->ratio = config_ratio("1:10");
+        cfg->ratio = cfg->crc_verify ? config_ratio("1:0") : config_ratio("1:10");
     if (!cfg->pipeline)
         cfg->pipeline = 1;
     if (!cfg->data_size && !cfg->data_size_list.is_defined() && !cfg->data_size_range.is_defined() && !cfg->data_import)
@@ -306,7 +312,9 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_wait_timeout, 
         o_json_out_file,
         o_cpu_split,
-        o_taskset
+        o_taskset,
+        o_crc_verify,
+        o_compress_perc,
     };
     
     static struct option long_options[] = {
@@ -326,6 +334,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         { "clients",                    1, 0, 'c' },
         { "threads",                    1, 0, 't' },        
         { "cpu-split",                  0, 0, o_cpu_split },
+        { "compress-perc",              1, 0, o_compress_perc },
         { "taskset",                    1, 0, o_taskset },
         { "test-time",                  1, 0, o_test_time },
         { "ratio",                      1, 0, o_ratio },
@@ -340,6 +349,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         { "data-import",                1, 0, o_data_import },
         { "data-verify",                0, 0, o_data_verify },
         { "verify-only",                0, 0, o_verify_only },
+        { "crc-verify",                 0, 0, o_crc_verify },
         { "generate-keys",              0, 0, o_generate_keys },
         { "key-prefix",                 1, 0, o_key_prefix },
         { "key-minimum",                1, 0, o_key_minimum },
@@ -464,6 +474,14 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                         return -1;
                     }
                     break;
+                case o_compress_perc:
+                    endptr = NULL;
+                    cfg->compress_perc = (unsigned int) strtoul(optarg, &endptr, 10);
+                    if (cfg->compress_perc >= 100 || !endptr || *endptr != '\0') {
+                        fprintf(stderr, "error: compression precentile must be between 0 to 99");
+                        return -1;
+                    }
+                    break;
                 case o_cpu_split:
                     cfg->cpu_split = true;
                     break;
@@ -500,6 +518,10 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                     cfg->ratio = config_ratio(optarg);
                     if (!cfg->ratio.is_defined()) {
                         fprintf(stderr, "error: ratio must be expressed as [0-n]:[0-n].\n");
+                        return -1;
+                    }
+                    if (cfg->crc_verify) {
+                        fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
                         return -1;
                     }
                     break;
@@ -568,6 +590,13 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                 case o_verify_only:
                     cfg->verify_only = 1;
                     cfg->data_verify = 1;   // Implied
+                    break;
+                case o_crc_verify:
+                    cfg->crc_verify = true;
+                    if (cfg->ratio.is_defined()) {
+                        fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
+                        return -1;
+                    }
                     break;
                 case o_key_prefix:
                     cfg->key_prefix = optarg;
@@ -704,6 +733,7 @@ void usage() {
             "                                 use 'allkeys' to run on the entire key-range\n"
             "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
             "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
+            "      --compress-perc=NUMBER     NUMBER represents precentile for which the data is at least compressible\n"
             "      --cpu-split                Each thread will run on a single cpu\n"
             "      --taskset=LIST             Use cpus from taskset to run threads on\n"
             "      --test-time=SECS           Number of seconds to run the test\n"
@@ -734,6 +764,7 @@ void usage() {
             "      --data-import=FILE         Read object data from file\n"
             "      --data-verify              Enable data verification when test is complete\n"
             "      --verify-only              Only perform --data-verify, without any other test\n"
+            "      --crc-verify               Perform test using crc verification\n"
             "      --generate-keys            Generate keys for imported objects\n"
             "      --no-expiry                Ignore expiry information in imported data\n"
             "\n"
@@ -773,13 +804,16 @@ struct cg_thread {
     pthread_t m_thread;
     bool m_finished;
     
-    cg_thread(unsigned int id, benchmark_config* config, object_generator* obj_gen) :
+    cg_thread(unsigned int id, benchmark_config* config, object_generator* obj_gen, bool verify) :
         m_thread_id(id), m_config(config), m_obj_gen(obj_gen), m_cg(NULL), m_protocol(NULL), m_finished(false)
     {
         m_protocol = protocol_factory(m_config->protocol);
         assert(m_protocol != NULL);
-        
-        m_cg = new client_group(m_config, m_protocol, m_obj_gen);
+
+        if (!verify)
+            m_cg = new client_group(m_config, m_protocol, m_obj_gen);
+        else
+            m_cg = new verify_client_group(m_config, m_protocol, m_obj_gen);
     }
         
     ~cg_thread()
@@ -851,14 +885,14 @@ void size_to_str(unsigned long int size, char *buf, int buf_len)
     }    
 }
 
-run_stats run_benchmark(int run_id, benchmark_config* cfg, object_generator* obj_gen)
+run_stats run_benchmark(int run_id, benchmark_config* cfg, object_generator* obj_gen, bool verify)
 {
     fprintf(stderr, "[RUN #%u] Preparing benchmark client...\n", run_id);
 
     // prepare threads data
     std::vector<cg_thread*> threads;
     for (unsigned int i = 0; i < cfg->threads; i++) {
-        cg_thread* t = new cg_thread(i, cfg, obj_gen);
+        cg_thread* t = new cg_thread(i, cfg, obj_gen, verify);
         assert(t != NULL);
 
         if (t->prepare() < 0) {
@@ -1044,7 +1078,7 @@ int main(int argc, char *argv[])
     // create and configure object generator
     object_generator* obj_gen = NULL;
     imported_keylist* keylist = NULL;
-    if (!cfg.data_import) {
+    if (!cfg.data_import && !cfg.crc_verify) {
         if (cfg.data_verify) {
             fprintf(stderr, "error: use data-verify only with data-import\n");
             exit(1);
@@ -1053,8 +1087,28 @@ int main(int argc, char *argv[])
             fprintf(stderr, "error: use no-expiry only with data-import\n");
             exit(1);
         }
-        
         obj_gen = new object_generator();
+        assert(obj_gen != NULL);
+    }
+    else if (cfg.crc_verify) {
+        if (cfg.data_verify) {
+            fprintf(stderr, "error: use data-verify only with data-import\n");
+            exit(1);
+        }
+        if (cfg.no_expiry) {
+            fprintf(stderr, "error: use no-expiry only with data-import\n");
+            exit(1);
+        }
+        if (cfg.data_size_list.is_defined() ||
+            cfg.data_size_range.is_defined()) {
+            fprintf(stderr, "error: crc verification can only be used with fixed data size.\n");
+            exit(1);
+        }
+        if (!strcmp(cfg.key_pattern, "P:P")==0) {
+            fprintf(stderr, "error: crc verification can only be used with P:P key pattern.\n");
+            exit(1);
+        }
+        obj_gen = new crc_object_generator();
         assert(obj_gen != NULL);
     } else {
         // check paramters
@@ -1118,6 +1172,10 @@ int main(int argc, char *argv[])
     if (cfg.select_db > 0 && strcmp(cfg.protocol, "redis")) {
         fprintf(stderr, "error: select-db can only be used with redis protocol.\n");
         usage();
+    }
+
+    if (cfg.compress_perc > 0) {
+        obj_gen->set_compress_precentile(cfg.compress_perc);
     }
     if (cfg.data_offset > 0) {
         if (cfg.data_offset > (1<<29)-1) {
@@ -1184,7 +1242,7 @@ int main(int argc, char *argv[])
             if (run_id > 1)
                 sleep(1);   // let connections settle
             
-            run_stats stats = run_benchmark(run_id, &cfg, obj_gen);
+            run_stats stats = run_benchmark(run_id, &cfg, obj_gen, false);
             all_stats.push_back(stats);
         }
         //
@@ -1268,6 +1326,49 @@ int main(int argc, char *argv[])
         delete client;
         delete verify_protocol;
         event_base_free(verify_event_base);
+    }
+
+    // If needed, crc data verification is done now...
+    if (cfg.crc_verify) {
+        fprintf(outfile, "\n\nPerforming CRC data verification...\n\n");
+
+        std::vector<run_stats> all_stats;
+        cfg.next_client_idx = 0;
+        dynamic_cast<crc_object_generator*>(obj_gen)->reset_next_key();
+        for (unsigned int run_id = 1; run_id <= cfg.run_count; run_id++) {
+            if (run_id > 1)
+                sleep(1);   // let connections settle
+
+            run_stats stats = run_benchmark(run_id, &cfg, obj_gen, true);
+            all_stats.push_back(stats);
+        }
+        //
+        // Print some run information
+        fprintf(outfile,
+                "%-9u Threads\n"
+                        "%-9u Connections per thread\n"
+                        "%-9u %s\n",
+                cfg.threads, cfg.clients,
+                cfg.requests > 0 ? cfg.requests : cfg.test_time,
+                cfg.requests > 0 ? "Requests per thread"  : "Seconds");
+        if (jsonhandler != NULL){
+            jsonhandler->open_nesting("client verifications results");
+            jsonhandler->write_obj("Threads","%u",cfg.threads);
+            jsonhandler->write_obj("Connections per thread","%u",cfg.clients);
+            jsonhandler->write_obj(cfg.requests > 0 ? "Requests per thread"  : "Seconds","%u",
+                                   cfg.requests > 0 ? cfg.requests : cfg.test_time);
+            jsonhandler->write_obj("keys verified successfuly", "%-10lu",  all_stats.begin()->get_verified_keys());
+            jsonhandler->write_obj("keys failed", "%-10lu",  all_stats.begin()->get_errors());
+            jsonhandler->close_nesting();
+        }
+
+        all_stats.begin()->print(outfile, cfg.hide_histogram, "VERIFICATION STATS", jsonhandler);
+
+        fprintf(outfile, "\nData verification completed:\n"
+                        "%-10lu keys verified successfuly.\n"
+                        "%-10lu keys failed.\n",
+                all_stats.begin()->get_verified_keys(),
+                all_stats.begin()->get_errors());
     }
 
     if (outfile != stdout) {
