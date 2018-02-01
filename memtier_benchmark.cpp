@@ -97,6 +97,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         "data_size = %u\n"
         "data_offset = %u\n"
         "random_data = %s\n"
+        "compression_ratio = %c\n"
         "data_size_range = %u-%u\n"
         "data_size_list = %s\n"
         "data_size_pattern = %s\n"
@@ -140,6 +141,7 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->data_size,
         cfg->data_offset,
         cfg->random_data ? "yes" : "no",
+        cfg->compression_ratio,
         cfg->data_size_range.min, cfg->data_size_range.max,
         cfg->data_size_list.print(size_list_buf, sizeof(size_list_buf)-1),
         cfg->data_size_pattern,
@@ -194,6 +196,7 @@ static void config_print_to_json(json_handler * jsonhandler, struct benchmark_co
     jsonhandler->write_obj("data_size_range"   ,"\"%u:%u\"",	cfg->data_size_range.min, cfg->data_size_range.max);
     jsonhandler->write_obj("data_size_list"    ,"\"%s\"",   	cfg->data_size_list.print(tmpbuf, sizeof(tmpbuf)-1));
     jsonhandler->write_obj("data_size_pattern" ,"\"%s\"", 		cfg->data_size_pattern);
+    jsonhandler->write_obj("compressino_ratio" ,"\"%s\"", 		cfg->compression_ratio);
     jsonhandler->write_obj("expiry_range"      ,"\"%u:%u\"",   	cfg->expiry_range.min, cfg->expiry_range.max);
     jsonhandler->write_obj("data_import"       ,"\"%s\"",       cfg->data_import);
     jsonhandler->write_obj("data_verify"       ,"\"%s\"",       cfg->data_verify ? "true" : "false");
@@ -250,6 +253,8 @@ static void config_init_defaults(struct benchmark_config *cfg)
         cfg->key_pattern = "R:R";
     if (!cfg->data_size_pattern)
         cfg->data_size_pattern = "R";
+    if (!cfg->compression_ratio)
+        cfg->compression_ratio = 0;
     if (cfg->requests == (unsigned int)-1) {
         cfg->requests = cfg->key_maximum - cfg->key_minimum;
         if (strcmp(cfg->key_pattern, "P:P")==0)
@@ -283,6 +288,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_data_size_range,
         o_data_size_list,
         o_data_size_pattern,
+        o_compression_ratio,
         o_data_offset,
         o_expiry_range,
         o_data_import,
@@ -340,6 +346,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         { "data-size-range",            1, 0, o_data_size_range },
         { "data-size-list",             1, 0, o_data_size_list },
         { "data-size-pattern",          1, 0, o_data_size_pattern },
+        { "compression-ratio",          1, 0, o_compression_ratio },
         { "expiry-range",               1, 0, o_expiry_range },
         { "data-import",                1, 0, o_data_import },
         { "data-verify",                0, 0, o_data_verify },
@@ -566,6 +573,14 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                         (cfg->data_size_pattern[0] != 'R' && cfg->data_size_pattern[0] != 'S')) {
                             fprintf(stderr, "error: data-size-pattern must be either R or S.\n");
                             return -1;
+                    }
+                    break;
+                case o_compression_ratio:
+                    endptr = NULL;
+                    cfg->compression_ratio = (unsigned short) strtoul(optarg, &endptr, 10);
+                    if (!endptr || *endptr != '\0' || cfg->compression_ratio > 100) {
+                        fprintf(stderr, "error: compression-ratio must be a number between 0 and 100.\n");
+                        return -1;
                     }
                     break;
                 case o_data_import:
@@ -1153,6 +1168,7 @@ int main(int argc, char *argv[])
     }
     if (!cfg.data_import) {
         obj_gen->set_random_data(cfg.random_data);
+        obj_gen->set_compression_ratio(cfg.compression_ratio);
     }
 
     if (cfg.select_db > 0 && strcmp(cfg.protocol, "redis")) {
