@@ -196,7 +196,7 @@ static void config_print_to_json(json_handler * jsonhandler, struct benchmark_co
     jsonhandler->write_obj("data_size_range"   ,"\"%u:%u\"",	cfg->data_size_range.min, cfg->data_size_range.max);
     jsonhandler->write_obj("data_size_list"    ,"\"%s\"",   	cfg->data_size_list.print(tmpbuf, sizeof(tmpbuf)-1));
     jsonhandler->write_obj("data_size_pattern" ,"\"%s\"", 		cfg->data_size_pattern);
-    jsonhandler->write_obj("compressino_ratio" ,"\"%s\"", 		cfg->compression_ratio);
+    jsonhandler->write_obj("compressino_ratio" ,"\"%u\"", 		cfg->compression_ratio);
     jsonhandler->write_obj("expiry_range"      ,"\"%u:%u\"",   	cfg->expiry_range.min, cfg->expiry_range.max);
     jsonhandler->write_obj("data_import"       ,"\"%s\"",       cfg->data_import);
     jsonhandler->write_obj("data_verify"       ,"\"%s\"",       cfg->data_verify ? "true" : "false");
