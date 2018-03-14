@@ -710,8 +710,46 @@ int memcache_binary_protocol::write_command_get(const char *key, int key_len, un
 
 int memcache_binary_protocol::write_command_multi_get(const keylist *keylist)
 {
-    fprintf(stderr, "error: multi get not implemented for binary memcache yet!\n");
-    assert(0);
+    int cmd_size = 0;
+    unsigned int last_key_len = 0;
+    const char *last_key;
+    // should we implement this with GETQ?
+    for (unsigned int i=0; i < keylist->get_keys_count() - 1; i++) {
+        unsigned int key_len = 0;
+        const char *key;
+
+        key =  keylist->get_key(i, &key_len);
+        protocol_binary_request_getkq req;
+
+        memset(&req, 0, sizeof(req));
+        req.message.header.request.magic = PROTOCOL_BINARY_REQ;
+        req.message.header.request.opcode = PROTOCOL_BINARY_CMD_GETKQ;
+        req.message.header.request.keylen = htons(key_len);
+        req.message.header.request.datatype = PROTOCOL_BINARY_RAW_BYTES;
+        req.message.header.request.bodylen = htonl(key_len);
+        req.message.header.request.extlen = 0;
+
+        evbuffer_add(m_write_buf, &req, sizeof(req));
+        evbuffer_add(m_write_buf, key, key_len);
+
+        cmd_size += sizeof(req) + key_len;
+    }
+
+    last_key = keylist->get_key(keylist->get_keys_count() - 1, &last_key_len);
+    protocol_binary_request_getk req;
+
+    memset(&req, 0, sizeof(req));
+    req.message.header.request.magic = PROTOCOL_BINARY_REQ;
+    req.message.header.request.opcode = PROTOCOL_BINARY_CMD_GETK;
+    req.message.header.request.keylen = htons(last_key_len);
+    req.message.header.request.datatype = PROTOCOL_BINARY_RAW_BYTES;
+    req.message.header.request.bodylen = htonl(last_key_len);
+    req.message.header.request.extlen = 0;
+
+    evbuffer_add(m_write_buf, &req, sizeof(req));
+    evbuffer_add(m_write_buf, last_key, last_key_len);
+
+    return sizeof(req) + last_key_len + cmd_size;
 }
 
 const char* memcache_binary_protocol::status_text(void)
