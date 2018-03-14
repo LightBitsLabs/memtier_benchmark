@@ -844,7 +844,8 @@ void verify_client::create_request(struct timeval timestamp)
 void verify_client::handle_response(struct timeval timestamp, request *request, protocol_response *response)
 {
     unsigned int rvalue_len;
-    const char *rvalue = response->get_value(&rvalue_len);
+    const char* key = NULL;
+    const char *rvalue = response->get_value(&rvalue_len, key);
     verify_request *vr = static_cast<verify_request *>(request);
 
     assert(vr->m_type == rt_get);
@@ -865,6 +866,10 @@ void verify_client::handle_response(struct timeval timestamp, request *request, 
             m_verified_keys++;
         }
     }
+    if (key != NULL)
+        free((void *)key);
+    if (rvalue != NULL)
+        free((void *)rvalue);
 }
 
 bool verify_client::finished(void)
@@ -934,7 +939,8 @@ void crc_verify_client::create_request(struct timeval timestamp)
 void crc_verify_client::handle_response(struct timeval timestamp, request *request, protocol_response *response)
 {
     unsigned int rvalue_len;
-    const char *rvalue = response->get_value(&rvalue_len);
+    const char* key = NULL;
+    const char *rvalue = response->get_value(&rvalue_len, key);
     verify_request *vr = static_cast<verify_request *>(request);
 
     assert(vr->m_type == rt_get);
@@ -961,6 +967,10 @@ void crc_verify_client::handle_response(struct timeval timestamp, request *reque
             m_errors++;
         }
     }
+    if (key != NULL)
+        free((void *)key);
+    if (rvalue != NULL)
+        free((void *)rvalue);
 }
 
 ///////////////////////////////////////////////////////////////////////////

@@ -87,20 +87,26 @@ const char* protocol_response::get_status(void)
     return m_status;
 }
 
-void protocol_response::set_value(const char* value, unsigned int value_len)
+void protocol_response::set_value(const char* value, unsigned int value_len, const char* key)
 {
-    if (m_value != NULL)
-        free((void *)m_value);
-    m_value = value;
+    key_val_node node(value, value_len, key);
+    m_values.push_back(node);
     m_value_len = value_len;
 }
 
-const char* protocol_response::get_value(unsigned int* value_len)
+const char* protocol_response::get_value(unsigned int *value_len, const char* key)
 {
     assert(value_len != NULL);
+    *value_len = m_values.front().value_len;
+    key = m_values.front().key;
+    const char* value = m_values.front().value;
+    m_values.pop_front();
+    return value;
+}
 
-    *value_len = m_value_len;
-    return m_value;
+unsigned int protocol_response::get_values_count()
+{
+    return m_values.size();
 }
 
 void protocol_response::set_total_len(unsigned int total_len)
@@ -123,15 +129,22 @@ unsigned int protocol_response::get_hits(void)
     return m_hits;
 }
 
+static bool deleteValues(key_val_node node) {
+    if (node.value != NULL)
+        free((void *)node.value);
+    if (node.key != NULL)
+        free((void *)node.key);
+        return true;
+}
+
 void protocol_response::clear(void)
 {
     if (m_status != NULL) {
         free((void *)m_status);
         m_status = NULL;
     }
-    if (m_value != NULL) {
-        free((void *)m_value);
-        m_value = NULL;
+    if (!m_values.empty()) {
+        m_values.remove_if(deleteValues);
     }
     m_value_len = 0;
     m_total_len = 0;
@@ -385,7 +398,7 @@ int redis_protocol::parse_response(void)
                         ret = evbuffer_drain(m_read_buf, 2);
                         assert(ret != -1);
 
-                        m_last_response.set_value(bulk_value, m_bulk_len);
+                        m_last_response.set_value(bulk_value, m_bulk_len, NULL);
                     } else {
                         int ret = evbuffer_drain(m_read_buf, m_bulk_len + 2);
                         assert(ret != -1);
@@ -569,7 +582,7 @@ int memcache_text_protocol::parse_response(void)
                         int ret = evbuffer_remove(m_read_buf, value, m_value_len);
                         assert((unsigned int) ret == 0);
 
-                        m_last_response.set_value(value, m_value_len);
+                        m_last_response.set_value(value, m_value_len, NULL);
                     } else {
                         int ret = evbuffer_drain(m_read_buf, m_value_len);
                         assert((unsigned int) ret == 0);
@@ -602,7 +615,7 @@ int memcache_text_protocol::parse_response(void)
 
 class memcache_binary_protocol : public abstract_protocol {
 protected:
-    enum response_state { rs_initial, rs_read_body };
+    enum response_state { rs_initial, rs_multi_initial, rs_read_body };
     response_state m_response_state;
     protocol_binary_response_no_extras m_response_hdr;
     size_t m_response_len;
@@ -805,6 +818,11 @@ int memcache_binary_protocol::parse_response(void)
         
         switch (m_response_state) {
             case rs_initial:
+                m_last_response.clear();
+                m_response_state = rs_multi_initial;
+                m_response_len = 0;
+
+            case rs_multi_initial:
                 if (evbuffer_get_length(m_read_buf) < sizeof(m_response_hdr))
                     return 0;               // no header yet?
 
@@ -816,8 +834,7 @@ int memcache_binary_protocol::parse_response(void)
                     return -1;
                 }
 
-                m_response_len = sizeof(m_response_hdr);
-                m_last_response.clear();
+                m_response_len += sizeof(m_response_hdr);
                 m_last_response.set_total_len(m_response_len);
                 if (status_text()) {
                     m_last_response.set_status(strdup(status_text()));
@@ -843,23 +860,33 @@ int memcache_binary_protocol::parse_response(void)
                 }
 
                 return 1;                
-                break;
+
             case rs_read_body:
                 if (evbuffer_get_length(m_read_buf) >= m_response_hdr.message.header.response.bodylen) {
-                    // get rid of extras and key, we don't care about them
+                    // get rid of extras , we don't care about them
                     ret = evbuffer_drain(m_read_buf, 
-                        m_response_hdr.message.header.response.extlen +
-                        m_response_hdr.message.header.response.keylen);
+                        m_response_hdr.message.header.response.extlen);
                     assert((unsigned int) ret == 0);
 
                     int actual_body_len = m_response_hdr.message.header.response.bodylen -
-                        m_response_hdr.message.header.response.extlen -
-                        m_response_hdr.message.header.response.keylen;
+                        m_response_hdr.message.header.response.extlen;
+
                     if (m_keep_value) {
+                        uint16_t keylen = m_response_hdr.message.header.response.keylen;
+                        uint8_t opcode = m_response_hdr.message.header.response.opcode;
+                        char* key = NULL;
+                        actual_body_len = actual_body_len - keylen;
+                        if (opcode == PROTOCOL_BINARY_CMD_GETK || opcode == PROTOCOL_BINARY_CMD_GETKQ) {
+                            key = (char *) malloc(keylen);
+                            assert(key != NULL);
+                            ret = evbuffer_remove(m_read_buf, key, keylen);
+                        } else {
+                            evbuffer_drain(m_read_buf, keylen);
+                        }
                         char *value = (char *) malloc(actual_body_len);
                         assert(value != NULL);
                         ret = evbuffer_remove(m_read_buf, value, actual_body_len);
-                        m_last_response.set_value(value, actual_body_len);
+                        m_last_response.set_value(value, actual_body_len, key);
                     } else {
                         int ret = evbuffer_drain(m_read_buf, actual_body_len);
                         assert((unsigned int) ret == 0);
@@ -871,12 +898,15 @@ int memcache_binary_protocol::parse_response(void)
                     m_response_len += m_response_hdr.message.header.response.bodylen;
                     m_last_response.set_total_len(m_response_len);
                     m_response_state = rs_initial;
-
+                    if (m_response_hdr.message.header.response.opcode == PROTOCOL_BINARY_CMD_GETKQ) {
+                        m_response_state = rs_multi_initial;
+                        continue;
+                    }
+                    m_response_state = rs_initial;
                     return 1;
-                } else {
-                    return 0;
                 }
-                break;
+                return 0;
+
             default:
                 benchmark_debug_log("unknown response state.\n");
                 return -1;
