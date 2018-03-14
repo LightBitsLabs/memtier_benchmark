@@ -940,19 +940,21 @@ keylist::keylist(unsigned int max_keys) :
     m_buffer(NULL), m_buffer_ptr(NULL), m_buffer_size(0),
     m_keys(NULL), m_keys_size(0), m_keys_count(0)
 {
-    m_keys_size = max_keys;
-    m_keys = (key_entry *) malloc(m_keys_size * sizeof(key_entry));
-    assert(m_keys != NULL);
-    memset(m_keys, 0, m_keys_size * sizeof(key_entry));
+    init(max_keys);
+}
 
-    /* allocate buffer for actual keys */
-    m_buffer_size = 256 * m_keys_size;
-    m_buffer = (char *) malloc(m_buffer_size);
-    assert(m_buffer != NULL);
-    memset(m_buffer, 0, m_buffer_size);
-
-    m_buffer_ptr = m_buffer;    
-}        
+keylist::keylist(const keylist &source) :
+    m_buffer(NULL), m_buffer_ptr(NULL), m_buffer_size(0),
+    m_keys(NULL), m_keys_size(0), m_keys_count(0)
+{
+    init(source.get_keys_count());
+    for (unsigned int i = 0; i<source.get_keys_count(); i++) {
+        unsigned int key_length = 0;
+        const char* key;
+        key = source.get_key(i, &key_length);
+        add_key(key, key_length);
+    }
+}
 
 keylist::~keylist()
 {
@@ -964,6 +966,22 @@ keylist::~keylist()
         free(m_keys);
         m_keys = NULL;
     }
+}
+
+void keylist::init(unsigned int max_keys)
+{
+    m_keys_size = max_keys;
+    m_keys = (key_entry *) malloc(m_keys_size * sizeof(key_entry));
+    assert(m_keys != NULL);
+    memset(m_keys, 0, m_keys_size * sizeof(key_entry));
+
+    /* allocate buffer for actual keys */
+    m_buffer_size = 256 * m_keys_size;
+    m_buffer = (char *) malloc(m_buffer_size);
+    assert(m_buffer != NULL);
+    memset(m_buffer, 0, m_buffer_size);
+
+    m_buffer_ptr = m_buffer;
 }
 
 bool keylist::add_key(const char *key, unsigned int key_len)

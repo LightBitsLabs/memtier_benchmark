@@ -887,20 +887,14 @@ crc_verify_client::verify_request::verify_request(request_type type,
                                               unsigned int size,
                                               struct timeval* sent_time,
                                               unsigned int keys,
-                                              const char *key,
-                                              unsigned int key_len) :
+                                              keylist keylist_source) :
         client::request(type, size, sent_time, keys),
-        m_key(NULL), m_key_len(0)
+        m_keylist(keylist_source)
 {
-    m_key_len = key_len;
-    m_key = new char[key_len];
-    memcpy(m_key, key, m_key_len);
 }
 
 crc_verify_client::verify_request::~verify_request(void)
 {
-    delete[] m_key;
-    m_key = NULL;
 }
 
 crc_verify_client::crc_verify_client(verify_client_group* group) :
@@ -922,25 +916,52 @@ unsigned long int crc_verify_client::get_errors(void)
 
 void crc_verify_client::create_request(struct timeval timestamp)
 {
+    int cmd_size = 0;
     // Prepare a GET request that will be compared against a previous
     // SET request.
-    unsigned int cmd_size;
-    int iter = obj_iter_type(m_config, 2);
-    unsigned int keylen;
-    const char *key = m_obj_gen->get_key(iter, &keylen);
-    assert(key != NULL);
-    assert(keylen > 0);
+    if (m_config->multi_key_get > 0) {
+        int iter = obj_iter_type(m_config, 2);
+        unsigned int keys_count = m_config->multi_key_get;
+        m_keylist->clear();
+        while (m_keylist->get_keys_count() < keys_count) {
+            unsigned int keylen;
+            const char *key = m_obj_gen->get_key(iter, &keylen);
+            assert(key != NULL);
+            assert(keylen > 0);
 
-    benchmark_debug_log("CRC verify: GET key=[%.*s]\n", keylen, key);
-    cmd_size = m_protocol->write_command_get(key, keylen, m_config->data_offset);
-    m_pipeline.push(new crc_verify_client::verify_request(rt_get, cmd_size, &timestamp, 1, key, keylen));
+            m_keylist->add_key(key, keylen);
+        }
+
+        const char *first_key, *last_key;
+        unsigned int first_key_len, last_key_len;
+        first_key = m_keylist->get_key(0, &first_key_len);
+        last_key = m_keylist->get_key(m_keylist->get_keys_count() - 1, &last_key_len);
+
+        benchmark_debug_log("MGET %d keys [%.*s] .. [%.*s]\n",
+                m_keylist->get_keys_count(), first_key_len, first_key, last_key_len, last_key);
+
+        cmd_size = m_protocol->write_command_multi_get(m_keylist);
+        m_get_ratio_count += keys_count;
+        m_pipeline.push(new crc_verify_client::verify_request(rt_get, cmd_size, &timestamp, m_keylist->get_keys_count(), *m_keylist));
+    } else {
+        int iter = obj_iter_type(m_config, 2);
+        unsigned int keylen;
+        const char *key = m_obj_gen->get_key(iter, &keylen);
+        assert(key != NULL);
+        assert(keylen > 0);
+
+        m_keylist->clear();
+        m_keylist->add_key(key, keylen);
+
+        benchmark_debug_log("CRC verify: GET key=[%.*s]\n", keylen, key);
+        cmd_size = m_protocol->write_command_get(key, keylen, m_config->data_offset);
+        m_pipeline.push(new crc_verify_client::verify_request(rt_get, cmd_size, &timestamp, 1, *m_keylist));
+    }
 }
 
 void crc_verify_client::handle_response(struct timeval timestamp, request *request, protocol_response *response)
 {
-    unsigned int rvalue_len;
-    const char* key = NULL;
-    const char *rvalue = response->get_value(&rvalue_len, key);
+    unsigned int values_count = response->get_values_count();
     verify_request *vr = static_cast<verify_request *>(request);
 
     assert(vr->m_type == rt_get);
@@ -949,28 +970,44 @@ void crc_verify_client::handle_response(struct timeval timestamp, request *reque
                           ts_diff(request->m_sent_time, timestamp),
                           response->get_hits(),
                           request->m_keys - response->get_hits());
-    if (response->is_error() || !rvalue) {
-        benchmark_error_log("error: request for key [%.*s] failed: %s\n",
-                            vr->m_key_len, vr->m_key, response->get_status());
+    if (response->is_error() || !values_count) {
+        unsigned int key_length;
+        if (values_count == 1) {
+            const char* key = vr->m_keylist.get_key(0, &key_length);
+            benchmark_error_log("error: request for key [%.*s] failed: %s\n",
+                                key_length, key, response->get_status());
+        } else {
+            benchmark_error_log("error: request for multiple keys failed: %s\n",
+                                response->get_status());
+            for (unsigned int i = 0; i < vr->m_keys; i++) {
+
+                const char* key = vr->m_keylist.get_key(i, &key_length);
+                benchmark_error_log("key:: [%.*s] \n", key_length, key);
+            }
+        }
         m_errors++;
     } else {
-        uint32_t crc = crc32::calc_crc32(rvalue, rvalue_len - crc32::size);
-        const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator *>(m_obj_gen)->get_actual_value_size();
-        if (memcmp(crc_buffer, &crc, crc32::size) == 0) {
-            benchmark_debug_log("key: [%.*s] verified successfuly.\n",
-                                vr->m_key_len, vr->m_key);
-            m_verified_keys++;
-        } else {
-            benchmark_error_log("error: key [%.*s]: verification failed. Expected hash: %u, present hash: %u.\n",
-                                vr->m_key_len, vr->m_key,
-                                crc, *(uint32_t *) crc_buffer);
-            m_errors++;
+        unsigned int values_count = response->get_values_count();
+        for (unsigned int i = 0; i < values_count; i++) {
+            unsigned int rvalue_len;
+            const char* key = NULL;
+            const char *rvalue = response->get_value(&rvalue_len, key);
+            uint32_t crc = crc32::calc_crc32(rvalue, rvalue_len - crc32::size);
+            const char *crc_buffer = rvalue + dynamic_cast<crc_object_generator *>(m_obj_gen)->get_actual_value_size();
+            if (memcmp(crc_buffer, &crc, crc32::size) == 0) {
+                benchmark_debug_log("key verified successfuly.\n");
+                m_verified_keys++;
+            } else {
+                benchmark_error_log("error: key verification failed. Expected hash: %u, present hash: %u.\n",
+                                    crc, *(uint32_t *) crc_buffer);
+                m_errors++;
+            }
+            if (key != NULL)
+                free((void*)key);
+            if (rvalue != NULL)
+                free((void*)rvalue);
         }
     }
-    if (key != NULL)
-        free((void *)key);
-    if (rvalue != NULL)
-        free((void *)rvalue);
 }
 
 ///////////////////////////////////////////////////////////////////////////

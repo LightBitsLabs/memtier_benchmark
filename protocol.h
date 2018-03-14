@@ -79,9 +79,12 @@ protected:
     key_entry *m_keys;
     unsigned int m_keys_size;
     unsigned int m_keys_count;
-    
+
+    void init(unsigned int max_keys);
+
 public:
     keylist(unsigned int max_keys);
+    keylist(const keylist &source);
     ~keylist();
 
     bool add_key(const char *key, unsigned int key_len);

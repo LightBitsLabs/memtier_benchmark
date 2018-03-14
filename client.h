@@ -244,15 +244,13 @@ public:
 class crc_verify_client : public client {
 protected:
     struct verify_request : public request {
-        char *m_key;
-        unsigned int m_key_len;
+        keylist m_keylist;
 
         verify_request(request_type type,
                        unsigned int size,
                        struct timeval* sent_time,
                        unsigned int keys,
-                       const char *key,
-                       unsigned int key_len);
+                       keylist keylist);
         virtual ~verify_request(void);
     };
     unsigned long int m_verified_keys;
