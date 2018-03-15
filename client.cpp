@@ -640,11 +640,18 @@ void client::handle_response(struct timeval timestamp, request *request, protoco
 {
     switch (request->m_type) {
         case rt_get:
-            m_stats.update_get_op(&timestamp,
-                request->m_size + response->get_total_len(),
-                ts_diff(request->m_sent_time, timestamp),
-                response->get_hits(),
-                request->m_keys - response->get_hits());
+            {
+                m_stats.update_get_op(&timestamp,
+                    request->m_size + response->get_total_len(),
+                    ts_diff(request->m_sent_time, timestamp),
+                    response->get_hits(),
+                    request->m_keys - response->get_hits());
+
+                unsigned int latencies_size = response->get_latencies_count();
+                for (unsigned int i = 0; i < latencies_size; i++) {
+                    m_stats.update_get_latency_map(response->get_latency());
+                }
+            }
             break;
         case rt_set:
             m_stats.update_set_op(&timestamp,
@@ -668,12 +675,14 @@ void client::process_response(void)
 
     struct timeval now;
     gettimeofday(&now, NULL);
+
+    client::request* req = m_pipeline.front();
     
-    while ((ret = m_protocol->parse_response()) > 0) {
+    while ((ret = m_protocol->parse_response(ts_diff_now(req->m_sent_time))) > 0) {
         bool error = false;
         protocol_response *r = m_protocol->get_response();
 
-        client::request* req = m_pipeline.front();
+        req = m_pipeline.front();
         m_pipeline.pop();
 
         if (req->m_type == rt_auth) {
@@ -703,8 +712,7 @@ void client::process_response(void)
             }
 
             handle_response(now, req, r);
-                
-            m_reqs_processed++;
+            m_reqs_processed += req->m_keys;
             responses_handled = true;
         }
         delete req;
@@ -970,6 +978,12 @@ void crc_verify_client::handle_response(struct timeval timestamp, request *reque
                           ts_diff(request->m_sent_time, timestamp),
                           response->get_hits(),
                           request->m_keys - response->get_hits());
+
+    unsigned int latencies_size = response->get_latencies_count();
+    for (unsigned int i = 0; i < latencies_size; i++) {
+        m_stats.update_get_latency_map(response->get_latency());
+    }
+
     if (response->is_error() || !values_count) {
         unsigned int key_length;
         if (values_count == 1) {
@@ -1297,16 +1311,19 @@ void run_stats::update_get_op(struct timeval* ts, unsigned int bytes, unsigned i
 {
     roll_cur_stats(ts);
     m_cur_stats.m_bytes_get += bytes;
-    m_cur_stats.m_ops_get++;
+    m_cur_stats.m_ops_get += hits+misses;
     m_cur_stats.m_get_hits += hits;
     m_cur_stats.m_get_misses += misses;
  
     m_cur_stats.m_total_get_latency += latency;
 
     m_totals.m_bytes += bytes;
-    m_totals.m_ops++;
+    m_totals.m_ops+= hits + misses;
     m_totals.m_latency += latency;
+}
 
+void run_stats::update_get_latency_map(unsigned int latency)
+{
     m_get_latency_map[get_2_meaningful_digits((float)latency/1000)]++;
 }
 

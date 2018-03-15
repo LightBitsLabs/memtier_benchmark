@@ -121,6 +121,8 @@ public:
     void update_set_op(struct timeval* ts, unsigned int bytes, unsigned int latency);
     void update_wait_op(struct timeval* ts, unsigned int latency);
 
+	void update_get_latency_map(unsigned int latency);
+
     void update_verified_keys(unsigned long int keys);
     void update_errors(unsigned long int errors);
 

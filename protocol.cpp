@@ -109,6 +109,22 @@ unsigned int protocol_response::get_values_count()
     return m_values.size();
 }
 
+void protocol_response::set_latency(unsigned int latency)
+{
+    m_latencies.push_back(latency);
+}
+
+unsigned int protocol_response::get_latency()
+{
+    unsigned int latency = m_latencies.front();
+    m_latencies.pop_front();
+    return latency;
+}
+
+unsigned int protocol_response::get_latencies_count()
+{
+    return m_latencies.size();
+}
 void protocol_response::set_total_len(unsigned int total_len)
 {
     m_total_len = total_len;
@@ -146,6 +162,9 @@ void protocol_response::clear(void)
     if (!m_values.empty()) {
         m_values.remove_if(deleteValues);
     }
+	if (!m_latencies.empty()) {
+		m_latencies.clear();
+	}
     m_value_len = 0;
     m_total_len = 0;
     m_hits = 0;
@@ -169,7 +188,7 @@ public:
     virtual int write_command_get(const char *key, int key_len, unsigned int offset);
     virtual int write_command_multi_get(const keylist *keylist);
     virtual int write_command_wait(unsigned int num_slaves, unsigned int timeout);
-    virtual int parse_response(void);
+    virtual int parse_response(unsigned int latency);
 };
 
 int redis_protocol::select_db(int db)
@@ -338,7 +357,7 @@ int redis_protocol::write_command_wait(unsigned int num_slaves, unsigned int tim
     return size;
 }
 
-int redis_protocol::parse_response(void)
+int redis_protocol::parse_response(unsigned int latency)
 {
     char *line;
 
@@ -359,6 +378,7 @@ int redis_protocol::parse_response(void)
 
                 // clear last response
                 m_last_response.clear();
+                m_last_response.set_latency(latency);
 
                 // bulk?
                 if (line[0] == '$') {
@@ -438,7 +458,7 @@ public:
     virtual int write_command_get(const char *key, int key_len, unsigned int offset);
     virtual int write_command_multi_get(const keylist *keylist);
     virtual int write_command_wait(unsigned int num_slaves, unsigned int timeout);
-    virtual int parse_response(void);
+    virtual int parse_response(unsigned int latency);
 };
 
 int memcache_text_protocol::select_db(int db)
@@ -520,7 +540,7 @@ int memcache_text_protocol::write_command_wait(unsigned int num_slaves, unsigned
     assert(0);
 }
 
-int memcache_text_protocol::parse_response(void)
+int memcache_text_protocol::parse_response(unsigned int latency)
 {
     char *line;
     size_t tmplen;
@@ -558,6 +578,7 @@ int memcache_text_protocol::parse_response(void)
                         return -1;
                     }
 
+                    m_last_response.set_latency(latency);
                     m_response_state = rs_read_value;
                     continue;
                 } else if (memcmp(line, "END", 3) == 0 ||
@@ -565,12 +586,12 @@ int memcache_text_protocol::parse_response(void)
                     if (m_last_response.get_status() != line)
                         free(line);
                     m_response_state = rs_read_end;
-                    break;
                 } else {
                     m_last_response.set_error(true);
                     benchmark_debug_log("unknown response: %s\n", line);
                     return -1;
                 }
+                m_last_response.set_latency(latency);
                 break;
                 
             case rs_read_value:                
@@ -630,7 +651,7 @@ public:
     virtual int write_command_get(const char *key, int key_len, unsigned int offset);
     virtual int write_command_multi_get(const keylist *keylist);
     virtual int write_command_wait(unsigned int num_slaves, unsigned int timeout);
-    virtual int parse_response(void);
+    virtual int parse_response(unsigned int latency);
 };
 
 int memcache_binary_protocol::select_db(int db)
@@ -810,7 +831,7 @@ int memcache_binary_protocol::write_command_wait(unsigned int num_slaves, unsign
     assert(0);
 }
 
-int memcache_binary_protocol::parse_response(void)
+int memcache_binary_protocol::parse_response(unsigned int latency)
 {
     while (true) {
         int ret;
@@ -850,7 +871,9 @@ int memcache_binary_protocol::parse_response(void)
                     status == PROTOCOL_BINARY_RESPONSE_EBUSY) {
                     m_last_response.set_error(true);
                 }
-                
+
+                m_last_response.set_latency(latency);
+
                 if (ntohl(m_response_hdr.message.header.response.bodylen) > 0) {
                     m_response_hdr.message.header.response.bodylen = ntohl(m_response_hdr.message.header.response.bodylen);
                     m_response_hdr.message.header.response.keylen = ntohs(m_response_hdr.message.header.response.keylen);
