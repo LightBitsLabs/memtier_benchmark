@@ -707,6 +707,9 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         }
     }
 
+    if (cfg->verify_only && cfg->crc_verify)
+	    cfg->data_verify = 0;
+
     return 0;
 }
 
