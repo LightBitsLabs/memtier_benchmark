@@ -514,10 +514,6 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
                         fprintf(stderr, "error: ratio must be expressed as [0-n]:[0-n].\n");
                         return -1;
                     }
-                    if (cfg->crc_verify) {
-                        fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
-                        return -1;
-                    }
                     break;
                 case o_pipeline:
                     endptr = NULL;
@@ -709,6 +705,11 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
 
     if (cfg->verify_only && cfg->crc_verify)
 	    cfg->data_verify = 0;
+
+    if (cfg->crc_verify && !cfg->verify_only && cfg->ratio.is_defined()) {
+	    fprintf(stderr, "error: --ratio and --crc-verify are mutually exclusive.\n");
+	    return -1;
+    }
 
     return 0;
 }
