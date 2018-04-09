@@ -151,7 +151,6 @@ static void config_print(FILE *file, struct benchmark_config *cfg)
         cfg->data_verify ? "yes" : "no",
         cfg->verify_only ? "yes" : "no",
         cfg->verify_set_only ? "yes" : "no",
-        cfg->verify_set_only ? "yes" : "no",
         cfg->crc_verify ? "yes" : "no",
         cfg->generate_keys ? "yes" : "no",
         cfg->key_prefix,
