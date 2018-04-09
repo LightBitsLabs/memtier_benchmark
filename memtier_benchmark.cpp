@@ -1125,8 +1125,10 @@ int main(int argc, char *argv[])
             exit(1);
         }
         if (!strcmp(cfg.key_pattern, "P:P")==0) {
-            fprintf(stderr, "error: crc verification can only be used with P:P key pattern.\n");
-            exit(1);
+            if (!cfg.verify_only && !cfg.verify_set_only) {
+                fprintf(stderr, "error: crc verification can only be used with P:P key pattern.\n");
+                exit(1);
+            }
         }
         obj_gen = new crc_object_generator();
         assert(obj_gen != NULL);
