@@ -985,7 +985,8 @@ void crc_verify_client::handle_response(struct timeval timestamp, request *reque
         m_stats.update_get_latency_map(response->get_latency());
     }
 
-    if (response->is_error() || !values_count) {
+    if (strcmp(response->get_status(), "PROTOCOL_BINARY_RESPONSE_KEY_ENOENT") == 0 ||
+                                                response->is_error() || !values_count) {
         unsigned int key_length;
         if (values_count == 1) {
             const char* key = vr->m_keylist.get_key(0, &key_length);
