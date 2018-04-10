@@ -142,7 +142,7 @@ bool client::setup_client(benchmark_config *config, abstract_protocol *protocol,
     else if (config->distinct_client_seed)
         m_obj_gen->set_random_seed(config->next_client_idx);
 
-    if (config->key_pattern[0]=='P') {
+    if (config->key_pattern[0]=='P' || config->key_pattern[0]=='C') {
         unsigned long long range = (config->key_maximum - config->key_minimum)/(config->clients*config->threads) + 1;
         unsigned long long min = config->key_minimum + range*config->next_client_idx;
         unsigned long long max = min+range;
@@ -490,7 +490,7 @@ bool client::is_conn_setup_done(void)
 static inline
 int obj_iter_type(benchmark_config *cfg, unsigned char index)
 {
-    if (cfg->key_pattern[index] == 'R')
+    if (cfg->key_pattern[index] == 'R' || cfg->key_pattern[index] == 'C')
         return OBJECT_GENERATOR_KEY_RANDOM;
     else if (cfg->key_pattern[index] == 'G')
         return OBJECT_GENERATOR_KEY_GAUSSIAN;
