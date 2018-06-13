@@ -423,7 +423,10 @@ void client::handle_event(short evtype)
         new_evtype = EV_READ;
     }
     if (evbuffer_get_length(m_write_buf) > 0) {
-        assert(finished() == false);
+        if (finished()) {
+            assert(m_config->requests <= 0 && "finished to write all requests but write buffer is not empty");
+            return;
+        }
         new_evtype |= EV_WRITE;
     }
 
